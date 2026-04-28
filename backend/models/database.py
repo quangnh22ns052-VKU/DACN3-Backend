@@ -58,10 +58,13 @@ logger = logging.getLogger(__name__)
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not DATABASE_URL:
-    raise ValueError(
-        "DATABASE_URL not found in .env file! "
-        "Make sure .env file exists with DATABASE_URL"
+    logger.warning(
+        "⚠️  DATABASE_URL not set! "
+        "App will start but database operations will fail. "
+        "Set DATABASE_URL in environment variables."
     )
+    # Set placeholder to allow import (will fail at connection time)
+    DATABASE_URL = "postgresql://disabled:disabled@localhost/disabled"
 
 # Get connection pool settings from environment
 DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "10"))
