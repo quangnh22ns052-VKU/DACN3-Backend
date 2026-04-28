@@ -24,10 +24,28 @@ RUN mkdir -p logs
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
+# =====================================================
+# DEFAULT ENVIRONMENT VARIABLES (Non-sensitive)
+# Render/AWS will override with their own values
+# =====================================================
+ENV BACKEND_HOST=0.0.0.0
+ENV BACKEND_PORT=8000
+ENV ALGORITHM=HS256
+ENV ACCESS_TOKEN_EXPIRE_MINUTES=30
+ENV LOG_LEVEL=INFO
+ENV ENVIRONMENT=production
+ENV DB_POOL_SIZE=10
+ENV DB_MAX_OVERFLOW=20
+ENV DB_POOL_RECYCLE=3600
+
+# API Keys & Secrets MUST be set via platform environment variables
+# DO NOT add VIRUSTOTAL_API_KEY, SECRET_KEY, etc here!
+# These will be set by Render/AWS at runtime
+
 EXPOSE 8000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+# Health check - Increased start-period for Render cold start
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
   CMD curl --fail http://localhost:8000/health || exit 1
 
 # Run application
