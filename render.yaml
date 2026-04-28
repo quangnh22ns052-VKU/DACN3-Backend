@@ -1,0 +1,67 @@
+services:
+  - type: web
+    name: phishguard-backend
+    runtime: docker
+    dockerfilePath: ./Backend/Dockerfile
+    
+    # Health check configuration
+    healthCheckPath: /health
+    healthCheckInterval: 30
+    
+    # Environment variables - Set these on Render dashboard
+    envVars:
+      - key: DATABASE_URL
+        scope: run
+        description: "PostgreSQL connection string from Neon/AWS RDS"
+      
+      - key: SECRET_KEY
+        scope: run
+        description: "JWT secret key (generate: python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+      
+      - key: ENVIRONMENT
+        value: production
+        scope: run
+      
+      - key: VIRUSTOTAL_API_KEY
+        scope: run
+        description: "VirusTotal API key for URL scanning"
+      
+      - key: GSB_API_KEY
+        scope: run
+        description: "Google Safe Browsing API key"
+      
+      - key: ABUSEIPDB_API_KEY
+        scope: run
+        description: "AbuseIPDB API key"
+      
+      - key: BACKEND_HOST
+        value: "0.0.0.0"
+        scope: run
+      
+      - key: BACKEND_PORT
+        value: "8000"
+        scope: run
+      
+      - key: FRONTEND_URL
+        scope: run
+        description: "Frontend URL (e.g., https://phishguard-frontend.onrender.com)"
+      
+      - key: DB_POOL_SIZE
+        value: "10"
+        scope: run
+      
+      - key: LOG_LEVEL
+        value: "INFO"
+        scope: run
+
+# Build command (optional - Dockerfile handles it)
+# buildCommand: "pip install -r Backend/requirements.txt"
+
+# Start command (Docker CMD)
+# startCommand: "uvicorn backend.api:app --host 0.0.0.0 --port 8000"
+
+# Deployment settings
+autoDeploy: true
+branches:
+  - branch: main
+    autoDeployOnPush: true
