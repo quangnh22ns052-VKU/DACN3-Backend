@@ -31,7 +31,14 @@ from backend.models.scan import Scan
 from backend.models.user import User
 
 router = APIRouter()
-detector = PhishDetector()
+_detector_instance = None
+
+def get_detector():
+    """Lazy load PhishDetector on first use (avoid import-time crashes)"""
+    global _detector_instance
+    if _detector_instance is None:
+        _detector_instance = PhishDetector()
+    return _detector_instance
 
 
 # ------------------------------------------------------------------ #
@@ -140,7 +147,7 @@ def scan_url_or_text(
 
  # --- 6. Xử lý ML + heuristics + giải thích ------------------
     try:
-        prediction        = detector.predict(clean_text)
+        prediction        = get_detector().predict(clean_text)
         heuristics_reason = get_heuristics_reason(clean_text)
         shap_explanation  = get_shap_explanation(clean_text)
 
