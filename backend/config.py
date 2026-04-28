@@ -90,7 +90,9 @@ class Config:
     # =====================================================
     RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
     RAILWAY_STATIC_URL = os.getenv("RAILWAY_STATIC_URL")
+    APPRUNNER_URL = os.getenv("APPRUNNER_URL")  # AWS AppRunner
     API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
+    FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:8501")
     
     @staticmethod
     def validate():
@@ -103,8 +105,8 @@ class Config:
         if Config.ENVIRONMENT == "production":
             if not Config.SECRET_KEY:
                 errors.append("SECRET_KEY required in production")
-            if not Config.RENDER_EXTERNAL_URL and not Config.RAILWAY_STATIC_URL:
-                errors.append("Cloud deployment URL not configured")
+            if not any([Config.RENDER_EXTERNAL_URL, Config.RAILWAY_STATIC_URL, Config.APPRUNNER_URL]):
+                errors.append("Cloud deployment URL not configured (RENDER_EXTERNAL_URL, RAILWAY_STATIC_URL, or APPRUNNER_URL)")
         
         if errors:
             logger.error("❌ Configuration errors: " + "; ".join(errors))

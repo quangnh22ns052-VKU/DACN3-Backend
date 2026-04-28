@@ -48,15 +48,22 @@ app = FastAPI(
 # =====================================================
 allowed_origins = [
     "http://localhost:3000",
-    "http://localhost:8501",  # Streamlit default port
+    "http://localhost:8501",  # Streamlit local
     "http://127.0.0.1:8501",
 ]
 
+# Add production/cloud URLs
 if Config.RENDER_EXTERNAL_URL:
     allowed_origins.append(Config.RENDER_EXTERNAL_URL)
 
 if Config.RAILWAY_STATIC_URL:
     allowed_origins.append(Config.RAILWAY_STATIC_URL)
+
+if Config.APPRUNNER_URL:
+    allowed_origins.append(Config.APPRUNNER_URL)
+
+if Config.FRONTEND_URL and Config.FRONTEND_URL not in allowed_origins:
+    allowed_origins.append(Config.FRONTEND_URL)
 
 app.add_middleware(
     CORSMiddleware,
