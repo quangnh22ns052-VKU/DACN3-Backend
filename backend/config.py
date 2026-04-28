@@ -29,6 +29,7 @@ LƯU Ý: Không được commit file .env, chỉ commit .env.example
 from dotenv import load_dotenv
 import os
 import logging
+from typing import Optional
 
 load_dotenv()
 
@@ -68,7 +69,7 @@ class Config:
     _ABUSEIPDB_API_KEY = os.getenv("ABUSEIPDB_API_KEY")
     
     @staticmethod
-    def get_api_key(key_name: str) -> str | None:
+    def get_api_key(key_name: str) -> Optional[str]:
         """Safely get API key without logging"""
         key_map = {
             "virustotal": Config._VIRUSTOTAL_API_KEY,
