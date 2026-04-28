@@ -8,7 +8,9 @@ ENV/
 .env.local
 *.log
 logs/
+# Exclude all pkl files by default, but allow trained models
 *.pkl
+!models/*.pkl
 .vscode/
 .idea/
 .DS_Store
