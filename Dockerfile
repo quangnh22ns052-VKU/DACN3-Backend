@@ -9,23 +9,17 @@ RUN pip install --no-cache-dir --user -r requirements.txt
 FROM python:3.9-slim
 WORKDIR /app
 RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+
+# Copy builder dependencies (stable layer - cached longer)
 COPY --from=builder /root/.local /root/.local
 ENV PATH=/root/.local/bin:$PATH
 
-# Copy application code
-COPY backend/ ./backend/
-COPY core/ ./core/
-COPY models/ ./models/
-COPY data/ ./data/
-COPY scripts/ ./scripts/
-RUN mkdir -p logs
-
-# Set Python to run in unbuffered mode
+# Set Python to run in unbuffered mode (doesn't affect cache)
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
 # =====================================================
-# DEFAULT ENVIRONMENT VARIABLES (Non-sensitive)
+# DEFAULT ENVIRONMENT VARIABLES (Non-sensitive, stable)
 # Render/AWS will override with their own values
 # =====================================================
 ENV BACKEND_HOST=0.0.0.0
@@ -38,9 +32,13 @@ ENV DB_POOL_SIZE=10
 ENV DB_MAX_OVERFLOW=20
 ENV DB_POOL_RECYCLE=3600
 
-# API Keys & Secrets MUST be set via platform environment variables
-# DO NOT add VIRUSTOTAL_API_KEY, SECRET_KEY, etc here!
-# These will be set by Render/AWS at runtime
+# Copy application code (volatile layer - changes frequently, goes last)
+COPY backend/ ./backend/
+COPY core/ ./core/
+COPY models/ ./models/
+COPY data/ ./data/
+COPY scripts/ ./scripts/
+RUN mkdir -p logs
 
 EXPOSE 8000
 
