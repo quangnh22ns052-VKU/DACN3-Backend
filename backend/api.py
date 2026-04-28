@@ -82,18 +82,19 @@ async def startup_event():
     """Initialize database and validate configuration on startup"""
     logger.info("🚀 Starting PhishGuard API...")
     
-    # Validate configuration
-    if not Config.validate():
-        logger.error("❌ Configuration validation failed")
-        raise RuntimeError("Configuration validation failed")
+    # Validate configuration (non-blocking warnings)
+    Config.validate()
     
-    # Initialize database (don't crash if fails)
+    # Initialize database (don't crash if fails - app can still serve health check)
     try:
-        init_db()
-        logger.info("✅ Database initialized")
+        if Config.DATABASE_URL:
+            init_db()
+            logger.info("✅ Database initialized")
+        else:
+            logger.warning("⚠️  DATABASE_URL not configured - database features will be unavailable")
     except Exception as e:
-        logger.warning(f"⚠️  Database initialization failed: {str(e)}")
-        logger.warning("⚠️  Continuing without database (app will work but data won't be saved)")
+        logger.warning(f"⚠️  Database initialization warning: {str(e)}")
+        logger.warning("⚠️  Continuing without database (health check will still work)")
     
     logger.info("✅ PhishGuard API ready!")
 

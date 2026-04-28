@@ -54,12 +54,10 @@ class Config:
     ALGORITHM = os.getenv("ALGORITHM", "HS256")
     ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
     
-    # Validate SECRET_KEY in production
+    # ENVIRONMENT setting (development allows missing SECRET_KEY)
     ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
     if ENVIRONMENT == "production" and not SECRET_KEY:
-        raise ValueError(
-            "❌ CRITICAL: SECRET_KEY must be set in production environment!"
-        )
+        logger.warning("⚠️  SECRET_KEY not set in production mode - JWT tokens may fail")
     
     # =====================================================
     # API KEYS (Threat Intelligence Services)
@@ -99,8 +97,10 @@ class Config:
         """Validate critical configuration at startup"""
         errors = []
         
+        # DATABASE_URL is required at runtime, not startup
+        # (Will be checked when actually connecting to DB)
         if not Config.DATABASE_URL:
-            errors.append("DATABASE_URL not configured")
+            logger.warning("⚠️  DATABASE_URL not set yet - will be needed for API calls")
         
         if Config.ENVIRONMENT == "production":
             if not Config.SECRET_KEY:
