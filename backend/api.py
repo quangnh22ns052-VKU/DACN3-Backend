@@ -81,6 +81,13 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup_event():
     """Initialize database and validate configuration on startup"""
+    import sys
+    
+    # Use print for direct stdout (guaranteed to show in Render logs)
+    print("🚀 Starting PhishGuard API...", flush=True, file=sys.stdout)
+    print(f"📍 Environment: {Config.ENVIRONMENT}", flush=True, file=sys.stdout)
+    print(f"📍 Database URL: {'✅ Set' if Config.DATABASE_URL else '⚠️ Not set'}", flush=True, file=sys.stdout)
+    
     logger.info("🚀 Starting PhishGuard API...")
     logger.info(f"📍 Environment: {Config.ENVIRONMENT}")
     logger.info(f"📍 Database URL: {'✅ Set' if Config.DATABASE_URL else '⚠️ Not set'}")
@@ -93,24 +100,31 @@ async def startup_event():
         if Config.DATABASE_URL:
             init_db()
             logger.info("✅ Database initialized")
+            print("✅ Database initialized", flush=True, file=sys.stdout)
         else:
             logger.warning("⚠️  DATABASE_URL not configured - database features will be unavailable")
+            print("⚠️  DATABASE_URL not configured - database features will be unavailable", flush=True, file=sys.stdout)
     except Exception as e:
         logger.warning(f"⚠️  Database initialization warning: {str(e)}")
+        print(f"⚠️  Database initialization warning: {str(e)}", flush=True, file=sys.stdout)
         logger.warning("⚠️  Continuing without database (health check will still work)")
+        print("⚠️  Continuing without database (health check will still work)", flush=True, file=sys.stdout)
     
     # =====================================================
     # SELF-TEST: Verify API is working correctly
     # =====================================================
     logger.info("🧪 Running startup diagnostics...")
+    print("🧪 Running startup diagnostics...", flush=True, file=sys.stdout)
     
     # Test 1: Check Model Loading
     try:
         from backend.routes.scan import get_detector
         detector = get_detector()
         logger.info("✅ ML Model loaded successfully")
+        print("✅ ML Model loaded successfully", flush=True, file=sys.stdout)
     except Exception as e:
         logger.error(f"❌ ML Model loading failed: {str(e)}")
+        print(f"❌ ML Model loading failed: {str(e)}", flush=True, file=sys.stdout)
     
     # Test 2: Database connectivity
     try:
@@ -118,10 +132,13 @@ async def startup_event():
             from backend.models.database import health_check
             if health_check():
                 logger.info("✅ Database connection verified")
+                print("✅ Database connection verified", flush=True, file=sys.stdout)
             else:
                 logger.warning("⚠️  Database health check failed")
+                print("⚠️  Database health check failed", flush=True, file=sys.stdout)
     except Exception as e:
         logger.warning(f"⚠️  Database health check skipped: {str(e)}")
+        print(f"⚠️  Database health check skipped: {str(e)}", flush=True, file=sys.stdout)
     
     # Test 3: Sample Prediction
     try:
@@ -129,21 +146,37 @@ async def startup_event():
         detector = get_detector()
         test_url = "https://example.com"
         result = detector.predict(test_url)
-        logger.info(f"✅ Sample prediction successful: {test_url} → {result.get('label')}")
+        msg = f"✅ Sample prediction successful: {test_url} → {result.get('label')}"
+        logger.info(msg)
+        print(msg, flush=True, file=sys.stdout)
     except Exception as e:
-        logger.error(f"❌ Sample prediction failed: {str(e)}")
+        msg = f"❌ Sample prediction failed: {str(e)}"
+        logger.error(msg)
+        print(msg, flush=True, file=sys.stdout)
     
     # Test 4: Configuration Summary
-    logger.info("=" * 60)
+    sep = "=" * 60
+    logger.info(sep)
     logger.info("📊 PhishGuard API Ready - Configuration Summary:")
     logger.info(f"  • Environment: {Config.ENVIRONMENT}")
     logger.info(f"  • Database: {'Configured ✅' if Config.DATABASE_URL else 'Disabled ⚠️'}")
     logger.info(f"  • ML Model: Loaded ✅")
     logger.info(f"  • CORS Origins: {len(allowed_origins)} endpoints allowed")
     logger.info(f"  • Port: 8000 (Uvicorn)")
-    logger.info("=" * 60)
+    logger.info(sep)
     logger.info("✅ PhishGuard API is READY for requests! 🚀")
-    logger.info("=" * 60)
+    logger.info(sep)
+    
+    print(sep, flush=True, file=sys.stdout)
+    print("📊 PhishGuard API Ready - Configuration Summary:", flush=True, file=sys.stdout)
+    print(f"  • Environment: {Config.ENVIRONMENT}", flush=True, file=sys.stdout)
+    print(f"  • Database: {'Configured ✅' if Config.DATABASE_URL else 'Disabled ⚠️'}", flush=True, file=sys.stdout)
+    print(f"  • ML Model: Loaded ✅", flush=True, file=sys.stdout)
+    print(f"  • CORS Origins: {len(allowed_origins)} endpoints allowed", flush=True, file=sys.stdout)
+    print(f"  • Port: 8000 (Uvicorn)", flush=True, file=sys.stdout)
+    print(sep, flush=True, file=sys.stdout)
+    print("✅ PhishGuard API is READY for requests! 🚀", flush=True, file=sys.stdout)
+    print(sep, flush=True, file=sys.stdout)
 
 @app.on_event("shutdown")
 async def shutdown_event():
