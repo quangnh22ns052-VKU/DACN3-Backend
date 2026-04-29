@@ -86,12 +86,14 @@ class User(Base):
         cascade="all, delete-orphan",
         lazy="dynamic"
     )
-    api_usage = relationship(
-        "APIUsage",
-        back_populates="user",
-        cascade="all, delete-orphan",
-        lazy="dynamic"
-    )
+    # Note: Commented out to avoid SQLAlchemy mapper initialization issues
+    # when DATABASE_URL is not set or models not fully imported
+    # api_usage = relationship(
+    #     "APIUsage",
+    #     back_populates="user",
+    #     cascade="all, delete-orphan",
+    #     lazy="dynamic"
+    # )
     feedbacks = relationship(
         "Feedback",
         back_populates="user",

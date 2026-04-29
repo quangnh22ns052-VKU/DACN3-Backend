@@ -78,10 +78,11 @@ class APIUsage(Base):
     )
     
     # Relationships
-    user = relationship(
-        "User",
-        back_populates="api_usage"
-    )
+    # Note: Commented out to avoid SQLAlchemy mapper initialization issues
+    # user = relationship(
+    #     "User",
+    #     back_populates="api_usage"
+    # )
     
     def __repr__(self):
         return (
