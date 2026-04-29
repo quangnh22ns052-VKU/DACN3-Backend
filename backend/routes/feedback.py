@@ -54,7 +54,7 @@ class FeedbackResponse(BaseModel):
 # Endpoints
 # ================================================================
 
-@router.post("/", response_model=FeedbackResponse)
+@router.post("", response_model=FeedbackResponse)
 def submit_feedback(request: FeedbackRequest):
     """
     Submit user feedback on a scan result.

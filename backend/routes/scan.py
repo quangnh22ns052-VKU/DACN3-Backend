@@ -105,7 +105,7 @@ def _validate(text: str, input_type: str, user_id: str, request_id: str) -> str:
 #  Endpoint chính                                                       #
 # ------------------------------------------------------------------ #
 
-@router.post("/", response_model=ScanResponse)
+@router.post("", response_model=ScanResponse)
 def scan_url_or_text(
     request: ScanRequest,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
