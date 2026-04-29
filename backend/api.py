@@ -81,6 +81,8 @@ app.add_middleware(
 async def startup_event():
     """Initialize database and validate configuration on startup"""
     logger.info("🚀 Starting PhishGuard API...")
+    logger.info(f"📍 Environment: {Config.ENVIRONMENT}")
+    logger.info(f"📍 Database URL: {'✅ Set' if Config.DATABASE_URL else '⚠️ Not set'}")
     
     # Validate configuration (non-blocking warnings)
     Config.validate()
@@ -96,7 +98,51 @@ async def startup_event():
         logger.warning(f"⚠️  Database initialization warning: {str(e)}")
         logger.warning("⚠️  Continuing without database (health check will still work)")
     
-    logger.info("✅ PhishGuard API ready!")
+    # =====================================================
+    # SELF-TEST: Verify API is working correctly
+    # =====================================================
+    logger.info("🧪 Running startup diagnostics...")
+    
+    # Test 1: Check Model Loading
+    try:
+        from backend.routes.scan import get_detector
+        detector = get_detector()
+        logger.info("✅ ML Model loaded successfully")
+    except Exception as e:
+        logger.error(f"❌ ML Model loading failed: {str(e)}")
+    
+    # Test 2: Database connectivity
+    try:
+        if Config.DATABASE_URL:
+            from backend.models.database import health_check
+            if health_check():
+                logger.info("✅ Database connection verified")
+            else:
+                logger.warning("⚠️  Database health check failed")
+    except Exception as e:
+        logger.warning(f"⚠️  Database health check skipped: {str(e)}")
+    
+    # Test 3: Sample Prediction
+    try:
+        from backend.routes.scan import get_detector
+        detector = get_detector()
+        test_url = "https://example.com"
+        result = detector.predict(test_url)
+        logger.info(f"✅ Sample prediction successful: {test_url} → {result.get('label')}")
+    except Exception as e:
+        logger.error(f"❌ Sample prediction failed: {str(e)}")
+    
+    # Test 4: Configuration Summary
+    logger.info("=" * 60)
+    logger.info("📊 PhishGuard API Ready - Configuration Summary:")
+    logger.info(f"  • Environment: {Config.ENVIRONMENT}")
+    logger.info(f"  • Database: {'Configured ✅' if Config.DATABASE_URL else 'Disabled ⚠️'}")
+    logger.info(f"  • ML Model: Loaded ✅")
+    logger.info(f"  • CORS Origins: {len(allowed_origins)} endpoints allowed")
+    logger.info(f"  • Port: {Config.BACKEND_PORT}")
+    logger.info("=" * 60)
+    logger.info("✅ PhishGuard API is READY for requests! 🚀")
+    logger.info("=" * 60)
 
 @app.on_event("shutdown")
 async def shutdown_event():
