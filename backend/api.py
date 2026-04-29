@@ -139,7 +139,7 @@ async def startup_event():
     logger.info(f"  • Database: {'Configured ✅' if Config.DATABASE_URL else 'Disabled ⚠️'}")
     logger.info(f"  • ML Model: Loaded ✅")
     logger.info(f"  • CORS Origins: {len(allowed_origins)} endpoints allowed")
-    logger.info(f"  • Port: {Config.BACKEND_PORT}")
+    logger.info(f"  • Port: 8000 (Uvicorn)")
     logger.info("=" * 60)
     logger.info("✅ PhishGuard API is READY for requests! 🚀")
     logger.info("=" * 60)

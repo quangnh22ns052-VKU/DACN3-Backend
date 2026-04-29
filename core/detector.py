@@ -46,16 +46,76 @@ SEE ALSO:
 
 import os
 import joblib
+import logging
+import warnings
+import pandas as pd
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
 
+logger = logging.getLogger(__name__)
 MODEL_PATH = os.path.join("models", "tfidf_lr.pkl")
+DATA_PATH = os.path.join("data", "dataset.csv")
 
 class PhishDetector:
     def __init__(self):
-        if not os.path.exists(MODEL_PATH):
-            raise FileNotFoundError(f"Model not found at {MODEL_PATH}. Train it first.")
-        self.pipeline = joblib.load(MODEL_PATH)  # contains vectorizer + model
+        """Load model with automatic retraining on version mismatch"""
+        self.pipeline = None
+        
+        # Try to load existing model
+        if os.path.exists(MODEL_PATH):
+            try:
+                with warnings.catch_warnings(record=True) as w:
+                    warnings.simplefilter("always")
+                    self.pipeline = joblib.load(MODEL_PATH)
+                    
+                    # Check for version warnings
+                    version_warnings = [warning for warning in w 
+                                      if "InconsistentVersionWarning" in str(warning.category)]
+                    if version_warnings:
+                        logger.warning(f"⚠️  Model version mismatch detected. Retraining...")
+                        self.pipeline = None
+                        
+            except Exception as e:
+                logger.warning(f"⚠️  Failed to load model: {str(e)}. Attempting retrain...")
+                self.pipeline = None
+        
+        # Retrain if load failed
+        if self.pipeline is None:
+            logger.info("🔄 Retraining model from data...")
+            self._retrain_model()
+    
+    def _retrain_model(self):
+        """Train new model from dataset"""
+        try:
+            if not os.path.exists(DATA_PATH):
+                raise FileNotFoundError(f"Training data not found at {DATA_PATH}")
+            
+            # Load dataset
+            df = pd.read_csv(DATA_PATH)
+            X = df.iloc[:, 0].values  # URLs
+            y = df.iloc[:, 1].values  # Labels
+            
+            # Train pipeline
+            self.pipeline = Pipeline([
+                ('tfidf', TfidfVectorizer(max_features=5000, ngram_range=(1, 2))),
+                ('lr', LogisticRegression(max_iter=200, random_state=42))
+            ])
+            self.pipeline.fit(X, y)
+            
+            # Save new model
+            os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
+            joblib.dump(self.pipeline, MODEL_PATH)
+            logger.info(f"✅ Model retrained and saved to {MODEL_PATH}")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to retrain model: {str(e)}")
+            raise
 
     def predict(self, text: str) -> dict:
+        if self.pipeline is None:
+            raise RuntimeError("Model not initialized")
+        
         probs = self.pipeline.predict_proba([text])[0]
         classes = self.pipeline.classes_
         result = {
