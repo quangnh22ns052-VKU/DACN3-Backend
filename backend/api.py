@@ -40,8 +40,7 @@ from backend.routes import scan, feedback, health
 app = FastAPI(
     title="PhishGuard API",
     version="1.0.0",
-    description="AI-powered phishing detection API",
-    redirect_slashes=False
+    description="AI-powered phishing detection API"
 )
 
 # =====================================================
