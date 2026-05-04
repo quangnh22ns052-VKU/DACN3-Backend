@@ -67,15 +67,40 @@ SEE ALSO:
 def get_heuristics_reason(url_text: str) -> dict:
     """Phân tích URL có dấu hiệu phishing không"""
     reasons = []
+    url_lower = url_text.lower()
 
-    if "free" in url_text.lower():
+    # Rule 1: Từ khóa "free"
+    if "free" in url_lower:
         reasons.append("Chứa từ 'free' - dấu hiệu phishing")
-    if "login" in url_text.lower() and "secure" not in url_text.lower():
+    
+    # Rule 2: Login không secure
+    if "login" in url_lower and "secure" not in url_lower:
         reasons.append("Yêu cầu login nhưng không có 'secure'")
+    
+    # Rule 3: URL quá dài
     if len(url_text) > 75:
         reasons.append("URL quá dài - dấu hiệu phishing")
+    
+    # Rule 4: HTTP không an toàn
     if url_text.startswith("http://"):
         reasons.append("Không dùng HTTPS - không an toàn")
+    
+    # Rule 5: Từ khóa cá cược (gambling keywords)
+    gambling_keywords = ["casino", "bet", "xocdia", "thapcam", "cá cược", "tài xỉu", 
+                         "poker", "blackjack", "roulette", "slot", "jackpot", "lottery"]
+    if any(keyword in url_lower for keyword in gambling_keywords):
+        reasons.append("Chứa từ khóa cá cược - có khả năng phishing hoặc scam")
+    
+    # Rule 6: Từ khóa ngân hàng/tài chính fake
+    bank_keywords = ["verify", "confirm", "update", "secure", "login", "paypal", "bank", 
+                     "account", "credential"]
+    if sum(1 for keyword in bank_keywords if keyword in url_lower) >= 2:
+        reasons.append("Quá nhiều từ khóa tài chính - dấu hiệu phishing")
+    
+    # Rule 7: Domain với số + ký tự đặc biệt
+    domain_part = url_lower.split("://")[-1].split("/")[0]
+    if domain_part.count(".") > 2 or any(char in domain_part for char in ["@", "#", "!"]):
+        reasons.append("Domain có cấu trúc bất thường - dấu hiệu phishing")
 
     if not reasons:
         return {

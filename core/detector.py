@@ -112,14 +112,112 @@ class PhishDetector:
             logger.error(f"❌ Failed to retrain model: {str(e)}")
             raise
 
-    def predict(self, text: str) -> dict:
+    def predict(self, text: str, threshold: float = 0.4) -> dict:
+        """
+        Predict with custom threshold for conservative classification.
+        
+        Args:
+            text: URL or text to analyze
+            threshold: Phishing probability threshold (default 0.4)
+                      - If phishing_prob >= threshold: "phishing"
+                      - If phishing_prob >= 0.3: "suspicious" 
+                      - Else: "safe"
+        
+        Returns: {
+            "label": "safe" | "suspicious" | "phishing",
+            "confidence": 0.0-1.0,
+            "probabilities": {"phishing": float, "safe": float},
+            "top_features": {"word1": score, "word2": score, ...}  # Top 5 TF-IDF words
+        }
+        """
         if self.pipeline is None:
             raise RuntimeError("Model not initialized")
         
         probs = self.pipeline.predict_proba([text])[0]
         classes = self.pipeline.classes_
+        
+        # Get phishing probability
+        phishing_idx = list(classes).index("phishing") if "phishing" in classes else 1
+        phishing_prob = float(probs[phishing_idx])
+        
+        # 3-level classification with custom threshold
+        if phishing_prob >= threshold:
+            label = "phishing"
+            confidence = phishing_prob
+        elif phishing_prob >= 0.3:
+            label = "suspicious"
+            confidence = phishing_prob
+        else:
+            label = "safe"
+            confidence = 1.0 - phishing_prob
+        
+        # Extract top contributing features from TF-IDF
+        top_features = self._get_top_features(text)
+        
         result = {
-            "label": self.pipeline.predict([text])[0],
-            "probabilities": {classes[i]: float(probs[i]) for i in range(len(classes))}
+            "label": label,
+            "confidence": round(confidence, 4),
+            "probabilities": {classes[i]: float(probs[i]) for i in range(len(classes))},
+            "top_features": top_features  # NEW: ML-based features
         }
         return result
+    
+    def _get_top_features(self, text: str, n_features: int = 5) -> dict:
+        """
+        Extract top N contributing TF-IDF features from input text.
+        Filter out generic words and keep only suspicious keywords.
+        
+        Returns dict: {"feature1": score, "feature2": score, ...}
+        """
+        try:
+            vectorizer = self.pipeline.named_steps['tfidf']
+            
+            # Get TF-IDF vector for this text
+            tfidf_vector = vectorizer.transform([text]).toarray()[0]
+            
+            # Get feature names
+            feature_names = vectorizer.get_feature_names_out()
+            
+            # List of generic/non-suspicious words to filter out
+            generic_words = {
+                'http', 'https', 'www', 'com', 'net', 'org', 'io', 'co', 'uk',
+                'a', 'the', 'is', 'to', 'from', 'in', 'at', 'by', 'for',
+                'and', 'or', 'an', 'be', 'on', 'it', 'as', 'with', 'this'
+            }
+            
+            # Phishing-related keywords to prioritize
+            phishing_keywords = {
+                'verify', 'confirm', 'update', 'account', 'click', 'login', 'password',
+                'bank', 'paypal', 'amazon', 'apple', 'microsoft', 'free', 'prize',
+                'urgent', 'immediate', 'action', 'required', 'suspended', 'confirm',
+                'authenticate', 'credential', 'secure', 'payment', 'card', 'expire',
+                'casino', 'bet', 'poker', 'slot', 'thapcam', 'xocdia', 'cá cược',
+                'loan', 'credit', 'tax', 'claim', 'refund', 'inherit'
+            }
+            
+            # Filter and score features
+            filtered_features = {}
+            for i, feature in enumerate(feature_names):
+                if tfidf_vector[i] > 0:
+                    # Skip generic words
+                    if feature.lower() in generic_words:
+                        continue
+                    
+                    # Boost score for phishing keywords
+                    score = float(tfidf_vector[i])
+                    if feature.lower() in phishing_keywords:
+                        score = score * 1.5  # Boost phishing-related keywords
+                    
+                    filtered_features[feature] = score
+            
+            # Sort by score and get top N
+            top_features = dict(
+                sorted(filtered_features.items(), key=lambda x: x[1], reverse=True)[:n_features]
+            )
+            
+            return top_features
+            
+        except Exception as e:
+            import logging
+            logging.warning(f"Failed to extract features: {e}")
+            return {}

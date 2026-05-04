@@ -35,7 +35,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Import routes
-from backend.routes import scan, feedback, health
+from backend.routes import scan, feedback, health, auth
 
 app = FastAPI(
     title="PhishGuard API",
@@ -187,6 +187,7 @@ async def shutdown_event():
 # ROUTES
 # =====================================================
 
+app.include_router(auth.router, prefix="/auth", tags=["Authentication"])
 app.include_router(scan.router, prefix="/scan", tags=["Scan"])
 app.include_router(feedback.router, prefix="/feedback", tags=["Feedback"])
 app.include_router(health.router, prefix="/health", tags=["Health"])

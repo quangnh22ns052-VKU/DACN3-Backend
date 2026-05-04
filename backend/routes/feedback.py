@@ -5,6 +5,7 @@ Endpoint tập hợp phản hồi từ người dùng - để cải thiện mô 
 """
 
 from fastapi import APIRouter, HTTPException, Depends, status
+from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, field_validator
 from typing import Optional
 from sqlalchemy.orm import Session
@@ -15,6 +16,7 @@ from backend.models.database import SessionLocal
 from backend.models.feedback import Feedback
 from backend.models.scan import Scan
 from backend.utils.logger import log_error
+from backend.utils.auth import AuthManager, security
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -55,11 +57,16 @@ class FeedbackResponse(BaseModel):
 # ================================================================
 
 @router.post("", response_model=FeedbackResponse)
-def submit_feedback(request: FeedbackRequest):
+def submit_feedback(
+    request: FeedbackRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
     """
     Submit user feedback on a scan result.
     
     This helps improve the ML model via retraining.
+    
+    Requires: Valid JWT token (authenticated user)
     
     Args:
         scan_id: ID of the scan to provide feedback on
@@ -70,13 +77,24 @@ def submit_feedback(request: FeedbackRequest):
         FeedbackResponse with saved feedback details
         
     Raises:
+        401: Unauthorized (token required)
         404: Scan not found
         400: Invalid input
     """
     db = SessionLocal()
     
     try:
-        # 1. Verify scan exists
+        # 1. Authenticate user
+        if not credentials:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Vui lòng đăng nhập để gửi phản hồi"
+            )
+        
+        user_info = AuthManager.authenticate_user(credentials)
+        user_id = user_info.get("user_id")
+        
+        # 2. Verify scan exists
         scan = db.query(Scan).filter(Scan.id == request.scan_id).first()
         if not scan:
             raise HTTPException(
@@ -84,22 +102,23 @@ def submit_feedback(request: FeedbackRequest):
                 detail=f"Không tìm thấy scan với ID: {request.scan_id}"
             )
         
-        # 2. Create feedback record
+        # 3. Create feedback record
         feedback = Feedback(
             scan_id=request.scan_id,
+            user_id=user_id,
             correct_label=request.correct_label,
-            user_comment=request.comment,
+            user_feedback=request.comment,
             created_at=datetime.utcnow()
         )
         
-        # 3. Save to database
+        # 4. Save to database
         db.add(feedback)
         db.commit()
         db.refresh(feedback)
         
-        logger.info(f"✅ Feedback saved: ID={feedback.id}, Scan={scan.id}, Label={request.correct_label}")
+        logger.info(f"✅ Feedback saved: ID={feedback.id}, Scan={scan.id}, User={user_id}, Label={request.correct_label}")
         
-        # 4. Return response
+        # 5. Return response
         return FeedbackResponse(
             id=feedback.id,
             scan_id=feedback.scan_id,

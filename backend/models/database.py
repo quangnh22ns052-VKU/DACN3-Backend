@@ -140,6 +140,14 @@ def init_db():
     """
     def _create_tables():
         try:
+            # In development, drop and recreate to match current model schema
+            if os.getenv("ENVIRONMENT") == "development":
+                try:
+                    Base.metadata.drop_all(bind=engine)
+                    logger.warning("⚠️  Development mode: dropped existing tables")
+                except:
+                    pass
+            
             Base.metadata.create_all(bind=engine)
             logger.info("✅ Database initialized - all tables created")
             return True
@@ -177,4 +185,24 @@ def health_check() -> bool:
         return True
     except Exception as e:
         logger.error(f"❌ Database health check failed: {str(e)}")
+        return False
+
+
+def drop_all_tables():
+    """
+    Drop all tables and recreate them.
+    WARNING: This will delete all data!
+    
+    Usage:
+        from backend.models.database import drop_all_tables
+        drop_all_tables()  # Call once, then restart server
+    """
+    try:
+        Base.metadata.drop_all(bind=engine)
+        logger.warning("⚠️  All database tables dropped")
+        Base.metadata.create_all(bind=engine)
+        logger.info("✅ Database tables recreated successfully")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Failed to drop/recreate tables: {str(e)}")
         return False

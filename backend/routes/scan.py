@@ -12,10 +12,10 @@ from typing import Optional
 from sqlalchemy.orm import Session
 from datetime import datetime
 import json
+import logging
 
 from core.detector import PhishDetector
 from core.heuristics import get_heuristics_reason
-from core.explainers import get_shap_explanation
 
 from backend.utils.validators import InputValidator, validate_input
 from backend.utils.auth import optional_auth, check_rate_limit, security
@@ -28,6 +28,9 @@ from backend.utils.logger import (
 )
 from backend.models.database import SessionLocal
 from backend.models.scan import Scan
+
+router = APIRouter()
+logger = logging.getLogger(__name__)
 from backend.models.user import User
 
 router = APIRouter()
@@ -63,7 +66,8 @@ class ScanResponse(BaseModel):
     input_type: str
     result: dict
     heuristics_reason: dict
-    advanced_explanation: dict
+    ml_features: dict
+    feature_explanation: str
 
 
 # ------------------------------------------------------------------ #
@@ -145,17 +149,24 @@ def scan_url_or_text(
         request_id=request_id,
     )
 
- # --- 6. Xử lý ML + heuristics + giải thích ------------------
+# --- 6. Xử lý ML + lấy feature explanations ------------------
     try:
-        prediction        = get_detector().predict(clean_text)
+        # Get ML prediction (với threshold 0.4 thay vì 0.5)
+        ml_prediction = get_detector().predict(clean_text, threshold=0.4)
+        
+        # Lấy heuristics analysis
         heuristics_reason = get_heuristics_reason(clean_text)
-        shap_explanation  = get_shap_explanation(clean_text)
-
-        # Wrap string → dict nếu cần
-        if isinstance(heuristics_reason, str):
-            heuristics_reason = {"message": heuristics_reason}
-        if isinstance(shap_explanation, str):
-            shap_explanation = {"message": shap_explanation}
+        
+        # Lấy top features từ ML model
+        top_features = ml_prediction.get("top_features", {})
+        
+        # Updated prediction with ML-based features
+        prediction = {
+            "label": ml_prediction["label"],
+            "confidence": ml_prediction.get("confidence", 0.0),
+            "probabilities": ml_prediction.get("probabilities", {}),
+            "top_features": top_features
+        }
 
     except Exception as exc:
         log_error(
@@ -177,9 +188,14 @@ def scan_url_or_text(
         "request_id":          request_id,
         "input":               clean_text,
         "input_type":          input_type,
-        "result":              prediction,
+        "result": {
+            "label": prediction["label"],
+            "confidence": prediction["confidence"],
+            "probabilities": prediction.get("probabilities", {}),
+        },
         "heuristics_reason":   heuristics_reason,
-        "advanced_explanation": shap_explanation,
+        "ml_features": prediction.get("top_features", {}),
+        "feature_explanation": "Top ML keywords that contributed to this classification"
     }
 
     log_scan_result(
@@ -190,33 +206,29 @@ def scan_url_or_text(
         request_id=request_id,
     )
 
-    # --- 8. LƯU VÀO DATABASE (NEW!) ----------------------------------
+    # --- 8. LƯU VÀO DATABASE ----------------------------------
     try:
         db = SessionLocal()
         
-        # Prepare scan data
+        # Prepare scan data - using ML confidence
         scan_record = Scan(
-            user_id=user_id if user_id != "anonymous" else None,  # NULL for anonymous
+            user_id=user_id if user_id != "anonymous" else None,
             input_text=clean_text,
-            result=prediction.get("label", "UNKNOWN").upper(),
-            probability=float(prediction.get("probabilities", {}).get("phishing", 0.0)),
-            ml_result=prediction.get("label", "UNKNOWN").upper(),
-            heuristic_result=heuristics_reason.get("triggered", False) and "PHISHING" or "LEGITIMATE",
-            explanation=json.dumps(shap_explanation, ensure_ascii=False),
+            result=prediction["label"].upper(),  # SAFE | SUSPICIOUS | PHISHING
+            probability=float(prediction.get("confidence", 0.0)),
+            ml_result=prediction.get("probabilities", {}).get("phishing", 0.0),
+            heuristic_result="PHISHING" if heuristics_reason.get("triggered", False) else "LEGITIMATE",
+            explanation=json.dumps({
+                "ml_features": prediction.get("top_features", {}),
+                "heuristics_rules": heuristics_reason.get("rules", []),
+                "probabilities": prediction.get("probabilities", {})
+            }, ensure_ascii=False),
             created_at=datetime.utcnow()
         )
         
         db.add(scan_record)
         db.commit()
         db.refresh(scan_record)
-        
-        log_scan_result(
-            user_id=user_id,
-            input_text=clean_text,
-            input_type=input_type,
-            result=f"Saved to DB with ID: {scan_record.id}",
-            request_id=request_id,
-        )
         
     except Exception as db_error:
         log_error(
@@ -225,8 +237,6 @@ def scan_url_or_text(
             input_type=input_type,
             request_id=request_id,
         )
-        # Don't fail the API call even if DB save fails
-        # Log the error but still return the result
         result_payload["warning"] = f"Kết quả xử lý được trả về nhưng không lưu vào DB: {str(db_error)}"
         
     finally:
@@ -234,3 +244,164 @@ def scan_url_or_text(
             db.close()
 
     return result_payload
+
+
+# ------------------------------------------------------------------ #
+#  Endpoint: Get Scan History                                         #
+# ------------------------------------------------------------------ #
+
+@router.get("/history")
+def get_scan_history(
+    limit: int = 10,
+    offset: int = 0,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+):
+    """
+    Get scan history for authenticated user or all users.
+    
+    Args:
+        limit: Number of results to return (default 10, max 100)
+        offset: Number of results to skip (default 0)
+        
+    Returns:
+        List of scan records with pagination info
+        
+    Requires: Valid JWT token (optional for demo, required in production)
+    """
+    from sqlalchemy import desc
+    from backend.utils.auth import AuthManager
+    
+    # Validate limit
+    limit = min(limit, 100)
+    if limit < 1:
+        limit = 10
+    
+    db = SessionLocal()
+    
+    try:
+        # Get user info if authenticated
+        user_id = None
+        if credentials:
+            try:
+                user_info = AuthManager.authenticate_user(credentials)
+                user_id = user_info.get("user_id")
+            except:
+                pass  # Continue without auth
+        
+        # Query scans
+        if user_id:
+            # Authenticated: get only user's scans
+            query = db.query(Scan).filter(Scan.user_id == user_id)
+        else:
+            # Anonymous: get all recent scans (for demo)
+            query = db.query(Scan)
+        
+        # Count total
+        total = query.count()
+        
+        # Get paginated results
+        scans = query.order_by(desc(Scan.created_at)).offset(offset).limit(limit).all()
+        
+        # Convert to response format
+        results = []
+        for scan in scans:
+            results.append({
+                "id": scan.id,
+                "input_text": scan.input_text,
+                "result": scan.result,
+                "probability": scan.probability,
+                "ml_result": scan.ml_result,
+                "heuristic_result": scan.heuristic_result,
+                "created_at": scan.created_at.isoformat() if scan.created_at else None
+            })
+        
+        log_scan_attempt(
+            user_id=user_id or "anonymous",
+            input_text="GET /history",
+            input_type="history",
+            request_id="history_query"
+        )
+        
+        return {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "count": len(results),
+            "scans": results
+        }
+        
+    except Exception as err:
+        logger.error(f"❌ Error retrieving scan history: {err}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Lỗi lấy lịch sử quét. Vui lòng thử lại."
+        )
+        
+    finally:
+        db.close()
+
+
+# ------------------------------------------------------------------ #
+#  Endpoint: Get Scan Details                                         #
+# ------------------------------------------------------------------ #
+
+@router.get("/{scan_id}")
+def get_scan_detail(
+    scan_id: int,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+):
+    """
+    Get detailed information about a specific scan.
+    
+    Args:
+        scan_id: ID of the scan to retrieve
+        
+    Returns:
+        Detailed scan information with explanation
+    """
+    db = SessionLocal()
+    
+    try:
+        # Get scan
+        scan = db.query(Scan).filter(Scan.id == scan_id).first()
+        if not scan:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Không tìm thấy scan với ID: {scan_id}"
+            )
+        
+        # Parse explanation if JSON string
+        explanation = scan.explanation
+        if explanation and isinstance(explanation, str):
+            try:
+                import json
+                explanation = json.loads(explanation)
+            except:
+                pass
+        
+        logger.info(f"✅ Retrieved scan detail: ID={scan_id}")
+        
+        return {
+            "id": scan.id,
+            "user_id": scan.user_id,
+            "input_text": scan.input_text,
+            "result": scan.result,
+            "probability": scan.probability,
+            "ml_result": scan.ml_result,
+            "heuristic_result": scan.heuristic_result,
+            "explanation": explanation,
+            "created_at": scan.created_at.isoformat() if scan.created_at else None
+        }
+        
+    except HTTPException as http_err:
+        raise http_err
+        
+    except Exception as err:
+        logger.error(f"❌ Error retrieving scan detail: {err}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Lỗi lấy chi tiết quét. Vui lòng thử lại."
+        )
+        
+    finally:
+        db.close()

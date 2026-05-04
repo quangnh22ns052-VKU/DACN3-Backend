@@ -56,11 +56,11 @@ class Scan(Base):
     # Primary Key
     id = Column(Integer, primary_key=True, index=True)
     
-    # Foreign Key to User
+    # Foreign Key to User (NULL for anonymous scans)
     user_id = Column(
         Integer,
         ForeignKey("users.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,  # Allow NULL for anonymous users
         index=True
     )
     
