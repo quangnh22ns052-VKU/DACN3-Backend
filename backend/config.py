@@ -96,12 +96,22 @@ class Config:
     @staticmethod
     def validate():
         """Validate critical configuration at startup"""
+        import sys
         errors = []
+        warnings = []
         
-        # DATABASE_URL is required at runtime, not startup
-        # (Will be checked when actually connecting to DB)
+        # DATABASE_URL validation
         if not Config.DATABASE_URL:
-            logger.warning("⚠️  DATABASE_URL not set yet - will be needed for API calls")
+            msg = "⚠️  DATABASE_URL not set - database features will be unavailable"
+            warnings.append(msg)
+            logger.warning(msg)
+            print(msg, flush=True, file=sys.stdout)
+        elif "localhost" in Config.DATABASE_URL and Config.ENVIRONMENT == "production":
+            msg = "⚠️  DATABASE_URL points to localhost in production - this will fail on cloud!"
+            warnings.append(msg)
+            logger.warning(msg)
+            print(msg, flush=True, file=sys.stdout)
+            print("💡 Use Neon (https://console.neon.tech/) or AWS RDS for cloud database", flush=True, file=sys.stdout)
         
         if Config.ENVIRONMENT == "production":
             if not Config.SECRET_KEY:
@@ -110,8 +120,11 @@ class Config:
                 errors.append("Cloud deployment URL not configured (RENDER_EXTERNAL_URL, RAILWAY_STATIC_URL, or APPRUNNER_URL)")
         
         if errors:
-            logger.error("❌ Configuration errors: " + "; ".join(errors))
+            error_msg = "❌ Configuration errors: " + "; ".join(errors)
+            logger.error(error_msg)
+            print(error_msg, flush=True, file=sys.stdout)
             return False
         
         logger.info("✅ Configuration validated successfully")
+        print("✅ Configuration validated successfully", flush=True, file=sys.stdout)
         return True

@@ -132,12 +132,14 @@ def get_db() -> Session:
 def init_db():
     """
     Initialize database by creating all tables.
-    Run this once on first deployment.
+    Non-blocking: doesn't crash app if database is unavailable.
     
     Usage:
         from backend.models.database import init_db
         init_db()
     """
+    import sys
+    
     def _create_tables():
         try:
             # In development, drop and recreate to match current model schema
@@ -149,29 +151,45 @@ def init_db():
                     pass
             
             Base.metadata.create_all(bind=engine)
-            logger.info("✅ Database initialized - all tables created")
+            msg = "✅ Database initialized - all tables created"
+            logger.info(msg)
+            print(msg, flush=True, file=sys.stdout)
             return True
         except Exception as e:
-            logger.error(f"❌ Failed to initialize database: {str(e)}")
+            error_msg = f"⚠️  Failed to initialize database: {str(e)}"
+            logger.warning(error_msg)
+            print(error_msg, flush=True, file=sys.stdout)
+            print("💡 Continuing without database - API will still work for non-DB operations", flush=True, file=sys.stdout)
             return False
     
-    # Run with timeout to prevent hanging
-    result = [False]
-    thread = threading.Thread(target=lambda: result.append(_create_tables()))
-    thread.daemon = True
-    thread.start()
-    thread.join(timeout=3)  # 3 second timeout
+    try:
+        # Run with timeout to prevent hanging
+        result = [False]
+        thread = threading.Thread(target=lambda: result.append(_create_tables()))
+        thread.daemon = True
+        thread.start()
+        thread.join(timeout=3)  # 3 second timeout
+        
+        if thread.is_alive():
+            warning_msg = "⚠️  Database initialization timed out (database may be unreachable)"
+            logger.warning(warning_msg)
+            print(warning_msg, flush=True, file=sys.stdout)
+            print("💡 Continuing without database - API will still work", flush=True, file=sys.stdout)
+            return False
+        
+        return result[-1] if result else False
     
-    if thread.is_alive():
-        logger.warning("⚠️  Database initialization timed out (database may be unreachable)")
+    except Exception as outer_e:
+        outer_error = f"⚠️  Unexpected error in database initialization: {str(outer_e)}"
+        logger.warning(outer_error)
+        print(outer_error, flush=True, file=sys.stdout)
         return False
-    
-    return result[-1] if result else False
 
 
 def health_check() -> bool:
     """
     Check if database is accessible and healthy.
+    Non-blocking: returns False if database is unavailable.
     
     Usage:
         from backend.models.database import health_check
@@ -184,7 +202,7 @@ def health_check() -> bool:
         logger.debug("✅ Database health check passed")
         return True
     except Exception as e:
-        logger.error(f"❌ Database health check failed: {str(e)}")
+        logger.debug(f"⚠️  Database health check failed: {str(e)}")
         return False
 
 
