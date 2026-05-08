@@ -16,6 +16,7 @@ import logging
 
 from core.detector import PhishDetector
 from core.heuristics import get_heuristics_reason
+from core.explainers import get_shap_explanation
 
 from backend.utils.validators import InputValidator, validate_input
 from backend.utils.auth import optional_auth, check_rate_limit, security
@@ -157,15 +158,21 @@ def scan_url_or_text(
         # Lấy heuristics analysis
         heuristics_reason = get_heuristics_reason(clean_text)
         
-        # Lấy top features từ ML model
-        top_features = ml_prediction.get("top_features", {})
+        # 🔴 LẤY SHAP EXPLANATION (AI-POWERED XAI) ────────────────────────
+        shap_result = get_shap_explanation(clean_text)
+        shap_features = shap_result.get("top_features", {})
+        explanation_method = shap_result.get("method", "unknown")
         
-        # Updated prediction with ML-based features
+        # Ưu tiên SHAP features, fallback ML features nếu SHAP rỗng
+        top_features = shap_features if shap_features else ml_prediction.get("top_features", {})
+        
+        # Updated prediction with SHAP-based features
         prediction = {
             "label": ml_prediction["label"],
             "confidence": ml_prediction.get("confidence", 0.0),
             "probabilities": ml_prediction.get("probabilities", {}),
-            "top_features": top_features
+            "top_features": top_features,
+            "explanation_method": explanation_method
         }
 
     except Exception as exc:
@@ -195,7 +202,8 @@ def scan_url_or_text(
         },
         "heuristics_reason":   heuristics_reason,
         "ml_features": prediction.get("top_features", {}),
-        "feature_explanation": "Top ML keywords that contributed to this classification"
+        "feature_explanation": f"Top {len(top_features)} features ({prediction.get('explanation_method', 'unknown')} method)",
+        "explanation_method": prediction.get("explanation_method", "unknown")
     }
 
     log_scan_result(
@@ -221,7 +229,8 @@ def scan_url_or_text(
             explanation=json.dumps({
                 "ml_features": prediction.get("top_features", {}),
                 "heuristics_rules": heuristics_reason.get("rules", []),
-                "probabilities": prediction.get("probabilities", {})
+                "probabilities": prediction.get("probabilities", {}),
+                "explanation_method": prediction.get("explanation_method", "unknown")
             }, ensure_ascii=False),
             created_at=datetime.utcnow()
         )

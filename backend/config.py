@@ -39,14 +39,25 @@ class Config:
     # =====================================================
     # DATABASE CONFIGURATION
     # =====================================================
+    # Primary Database (Neon PostgreSQL)
     DATABASE_URL = os.getenv("DATABASE_URL")
     if not DATABASE_URL:
         logger.warning("⚠️  DATABASE_URL not set in .env")
+    
+    # Backup Database (Supabase PostgreSQL) - For Failover & Sync
+    DATABASE_URL_BACKUP = os.getenv("DATABASE_URL_BACKUP")
+    if not DATABASE_URL_BACKUP:
+        logger.warning("⚠️  DATABASE_URL_BACKUP (Supabase) not set - Failover disabled")
     
     # Connection Pool Settings
     DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "10"))
     DB_MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "20"))
     DB_POOL_RECYCLE = int(os.getenv("DB_POOL_RECYCLE", "3600"))
+    
+    # Database Sync Settings
+    DB_SYNC_ENABLED = os.getenv("DB_SYNC_ENABLED", "true").lower() == "true"
+    DB_SYNC_INTERVAL = int(os.getenv("DB_SYNC_INTERVAL", "30"))  # 5 minutes
+    DB_FAILOVER_ENABLED = os.getenv("DB_FAILOVER_ENABLED", "true").lower() == "true"
     
     # =====================================================
     # SECURITY & AUTHENTICATION

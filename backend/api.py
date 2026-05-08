@@ -31,11 +31,46 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.config import Config
 from backend.models.database import init_db, health_check
 import logging
+import asyncio
+import sys
 
 logger = logging.getLogger(__name__)
 
+# =====================================================
+# BACKGROUND SYNC TASK
+# =====================================================
+
+background_sync_task = None
+
+async def background_sync_worker():
+    """
+    Background worker that syncs databases periodically.
+    Runs every DB_SYNC_INTERVAL seconds.
+    """
+    logger.info("🔄 Database sync worker started")
+    print("🔄 Database sync worker started", flush=True, file=sys.stdout)
+    
+    await asyncio.sleep(5)  # Wait 5 seconds after startup before first sync
+    
+    while True:
+        try:
+            # Import here to avoid circular imports
+            from backend.utils.database_sync import sync_databases
+            
+            sync_interval = Config.DB_SYNC_INTERVAL or 300  # Default 5 minutes
+            
+            logger.info(f"🔄 Running periodic database sync (interval: {sync_interval}s)")
+            sync_databases()
+            
+            # Sleep for the configured interval
+            await asyncio.sleep(sync_interval)
+            
+        except Exception as e:
+            logger.error(f"❌ Background sync error: {str(e)}")
+            await asyncio.sleep(30)  # Retry after 30 seconds on error
+
 # Import routes
-from backend.routes import scan, feedback, health, auth
+from backend.routes import scan, feedback, health, auth, admin
 
 app = FastAPI(
     title="PhishGuard API",
@@ -81,7 +116,7 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup_event():
     """Initialize database and validate configuration on startup"""
-    import sys
+    global background_sync_task
     
     # Use print for direct stdout (guaranteed to show in Render logs)
     print("🚀 Starting PhishGuard API...", flush=True, file=sys.stdout)
@@ -109,6 +144,23 @@ async def startup_event():
         print(f"⚠️  Database initialization warning: {str(e)}", flush=True, file=sys.stdout)
         logger.warning("⚠️  Continuing without database (health check will still work)")
         print("⚠️  Continuing without database (health check will still work)", flush=True, file=sys.stdout)
+    
+    # =====================================================
+    # START BACKGROUND SYNC TASK
+    # =====================================================
+    
+    if Config.DB_SYNC_ENABLED and Config.DATABASE_URL_BACKUP:
+        try:
+            background_sync_task = asyncio.create_task(background_sync_worker())
+            logger.info("✅ Background database sync task started")
+            print("✅ Background database sync task started", flush=True, file=sys.stdout)
+            print(f"🔄 Sync interval: {Config.DB_SYNC_INTERVAL} seconds", flush=True, file=sys.stdout)
+        except Exception as e:
+            logger.error(f"❌ Failed to start background sync: {str(e)}")
+            print(f"❌ Failed to start background sync: {str(e)}", flush=True, file=sys.stdout)
+    else:
+        logger.warning("⚠️  Database sync disabled or backup DB not configured")
+        print("⚠️  Database sync disabled or backup DB not configured", flush=True, file=sys.stdout)
     
     # =====================================================
     # SELF-TEST: Verify API is working correctly
@@ -180,8 +232,20 @@ async def startup_event():
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Cleanup on shutdown"""
+    """Cleanup on shutdown - cancel background tasks"""
+    global background_sync_task
+    
     logger.info("🛑 Shutting down PhishGuard API...")
+    print("🛑 Shutting down PhishGuard API...", flush=True, file=sys.stdout)
+    
+    # Cancel background sync task if running
+    if background_sync_task and not background_sync_task.done():
+        background_sync_task.cancel()
+        try:
+            await background_sync_task
+        except asyncio.CancelledError:
+            logger.info("✅ Background sync task cancelled")
+            print("✅ Background sync task cancelled", flush=True, file=sys.stdout)
 
 # =====================================================
 # ROUTES
@@ -191,6 +255,7 @@ app.include_router(auth.router, prefix="/auth", tags=["Authentication"])
 app.include_router(scan.router, prefix="/scan", tags=["Scan"])
 app.include_router(feedback.router, prefix="/feedback", tags=["Feedback"])
 app.include_router(health.router, prefix="/health", tags=["Health"])
+app.include_router(admin.router, tags=["Admin"])
 
 @app.get("/")
 def root():

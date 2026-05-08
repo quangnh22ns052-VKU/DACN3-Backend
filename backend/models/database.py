@@ -52,10 +52,11 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # =====================================================
-# DATABASE CONFIGURATION
+# DATABASE CONFIGURATION - DUAL DATABASE SUPPORT
 # =====================================================
 
 DATABASE_URL = os.getenv("DATABASE_URL")
+DATABASE_URL_BACKUP = os.getenv("DATABASE_URL_BACKUP")
 
 if not DATABASE_URL:
     logger.warning(
@@ -71,29 +72,131 @@ DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "10"))
 DB_MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "20"))
 DB_POOL_RECYCLE = int(os.getenv("DB_POOL_RECYCLE", "3600"))
 
-# =====================================================
-# CREATE SQLALCHEMY ENGINE
-# =====================================================
-
-engine = create_engine(
-    DATABASE_URL,
-    poolclass=QueuePool,
-    pool_size=DB_POOL_SIZE,              # Connections in pool when idle
-    max_overflow=DB_MAX_OVERFLOW,        # Additional connections when busy
-    pool_recycle=DB_POOL_RECYCLE,        # Recycle connections (1 hour)
-    pool_pre_ping=True,                  # Test connection before using
-    echo=False,                          # Set True for SQL debugging
-)
+# Dual database configuration
+DB_SYNC_ENABLED = os.getenv("DB_SYNC_ENABLED", "true").lower() == "true"
+DB_FAILOVER_ENABLED = os.getenv("DB_FAILOVER_ENABLED", "true").lower() == "true"
 
 # =====================================================
-# CREATE SESSION FACTORY
+# DATABASE STATUS TRACKING
 # =====================================================
 
-SessionLocal = sessionmaker(
-    autocommit=False,
-    autoflush=False,
-    bind=engine
-)
+class DatabaseStatus:
+    """Track which database is currently active"""
+    primary_active = True  # True = using DATABASE_URL, False = using DATABASE_URL_BACKUP
+    backup_available = bool(DATABASE_URL_BACKUP)
+    
+    @staticmethod
+    def switch_to_backup():
+        DatabaseStatus.primary_active = False
+        logger.warning("🔄 SWITCHED TO BACKUP DATABASE (Supabase)")
+    
+    @staticmethod
+    def switch_to_primary():
+        DatabaseStatus.primary_active = True
+        logger.info("🔄 SWITCHED BACK TO PRIMARY DATABASE (Neon)")
+    
+    @staticmethod
+    def get_active_db():
+        if DatabaseStatus.primary_active:
+            return DATABASE_URL
+        return DATABASE_URL_BACKUP
+
+# =====================================================
+# CREATE SQLALCHEMY ENGINES (PRIMARY + BACKUP)
+# =====================================================
+
+def _create_engine(database_url, engine_name="primary"):
+    """Create SQLAlchemy engine with proper configuration"""
+    try:
+        return create_engine(
+            database_url,
+            poolclass=QueuePool,
+            pool_size=DB_POOL_SIZE,
+            max_overflow=DB_MAX_OVERFLOW,
+            pool_recycle=DB_POOL_RECYCLE,
+            pool_pre_ping=True,
+            connect_args={"connect_timeout": 5},
+            echo=False,
+        )
+    except Exception as e:
+        logger.error(f"❌ Failed to create {engine_name} engine: {str(e)}")
+        raise
+
+# Create primary engine
+engine = _create_engine(DATABASE_URL, "primary")
+
+# Create backup engine if available
+backup_engine = None
+if DATABASE_URL_BACKUP and DB_FAILOVER_ENABLED:
+    try:
+        backup_engine = _create_engine(DATABASE_URL_BACKUP, "backup")
+        logger.info("✅ Backup database (Supabase) engine initialized")
+    except Exception as e:
+        logger.warning(f"⚠️  Backup engine initialization failed: {str(e)}")
+
+# =====================================================
+# FAILOVER ENGINE SELECTOR
+# =====================================================
+
+def get_active_engine():
+    """Get the currently active database engine with failover support"""
+    if DatabaseStatus.primary_active:
+        return engine
+    elif backup_engine:
+        return backup_engine
+    else:
+        return engine  # Fall back to primary if backup not available
+
+# =====================================================
+# CREATE SESSION FACTORY (WITH FAILOVER SUPPORT)
+# =====================================================
+
+def _create_session_factory(database_engine):
+    """Create a session factory for the given engine"""
+    return sessionmaker(
+        autocommit=False,
+        autoflush=False,
+        bind=database_engine
+    )
+
+# Primary session factory
+SessionLocal = _create_session_factory(engine)
+
+# Backup session factory (if available)
+SessionLocalBackup = None
+if backup_engine:
+    SessionLocalBackup = _create_session_factory(backup_engine)
+
+# =====================================================
+# FAILOVER-AWARE SESSION FUNCTION
+# =====================================================
+
+def get_db_session():
+    """Get database session with automatic failover support"""
+    if DatabaseStatus.primary_active:
+        try:
+            session = SessionLocal()
+            # Test the connection
+            session.execute(text("SELECT 1"))
+            return session
+        except Exception as e:
+            logger.warning(f"⚠️  Primary database failed: {str(e)}")
+            if backup_engine and DB_FAILOVER_ENABLED:
+                DatabaseStatus.switch_to_backup()
+                return SessionLocalBackup()
+            else:
+                raise
+    else:
+        # Using backup database
+        try:
+            session = SessionLocalBackup()
+            session.execute(text("SELECT 1"))
+            return session
+        except Exception as e:
+            logger.warning(f"⚠️  Backup database failed: {str(e)}")
+            # Try to switch back to primary
+            DatabaseStatus.switch_to_primary()
+            return SessionLocal()
 
 # =====================================================
 # BASE CLASS FOR ORM MODELS
@@ -108,6 +211,7 @@ Base = declarative_base()
 def get_db() -> Session:
     """
     Dependency function for FastAPI to get database session.
+    Supports automatic failover to backup database.
     
     Usage in routes:
         from sqlalchemy.orm import Session
@@ -118,15 +222,17 @@ def get_db() -> Session:
             items = db.query(Item).all()
             return items
     """
-    db = SessionLocal()
     try:
+        db = get_db_session()  # Uses failover-aware session
         yield db
     except Exception as e:
         logger.error(f"Database error: {str(e)}")
-        db.rollback()
+        if 'db' in locals():
+            db.rollback()
         raise
     finally:
-        db.close()
+        if 'db' in locals():
+            db.close()
 
 
 def init_db():
