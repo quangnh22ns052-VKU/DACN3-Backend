@@ -1,47 +1,85 @@
+
 import pandas as pd
 
-# File hiện tại
-MAIN_DATASET = r"D:\DACN3-Split\Backend\data\dataset.csv"
+# =========================================================
+# FILE DATASET
+# =========================================================
 
-# File mới cần thêm
-NEW_DATASET = r"D:\DACN3-Split\Backend\data\dataset_converted.csv"
+DATASET_PATH = r"D:\DACN3-Split\Backend\data\dataset.csv"
 
-# Đọc dataset hiện tại
-df_main = pd.read_csv(MAIN_DATASET)
+# =========================================================
+# LOAD DATASET
+# =========================================================
 
-# Đọc dataset mới
-df_new = pd.read_csv(NEW_DATASET)
+print("=" * 60)
+print("[INFO] Loading dataset...")
+print("=" * 60)
 
-# Chuẩn hóa tên cột nếu cần
-df_new = df_new.rename(columns={
-    "type": "label"
-})
+df = pd.read_csv(DATASET_PATH)
 
-# Chuẩn hóa label
-df_new["label"] = df_new["label"].replace({
-    "legitimate": "safe"
-})
+print(f"Total before reduction: {len(df)}")
 
-# Chỉ giữ đúng 2 cột cần thiết
-df_new = df_new[["url", "label"]]
+print("\nLabel distribution BEFORE:")
+print(df["label"].value_counts())
 
-# Gộp dữ liệu
-df_combined = pd.concat([df_main, df_new], ignore_index=True)
+# =========================================================
+# TÁCH RIÊNG SAFE / PHISHING
+# =========================================================
 
-# Xóa URL trùng lặp
-df_combined = df_combined.drop_duplicates(
-    subset=["url"],
-    keep="first"
+df_safe = df[df["label"] == "safe"]
+df_phishing = df[df["label"] == "phishing"]
+
+# =========================================================
+# GIỮ LẠI 80% MỖI LOẠI
+# =========================================================
+#
+# frac=0.8 nghĩa là giữ lại 80%
+# random_state giúp reproducible
+#
+
+df_safe_reduced = df_safe.sample(
+    frac=0.8,
+    random_state=42
 )
 
-# Lưu lại dataset chính
-df_combined.to_csv(MAIN_DATASET, index=False)
+df_phishing_reduced = df_phishing.sample(
+    frac=0.8,
+    random_state=42
+)
 
-# Thống kê
-print("✅ Dataset merged successfully!")
-print(f"Total URLs: {len(df_combined)}")
-print(f"Phishing: {(df_combined['label'] == 'phishing').sum()}")
-print(f"Safe: {(df_combined['label'] == 'safe').sum()}")
+# =========================================================
+# GỘP LẠI
+# =========================================================
 
-# Hiển thị vài dòng đầu
-print(df_combined.head())
+df_reduced = pd.concat([
+    df_safe_reduced,
+    df_phishing_reduced
+])
+
+# Shuffle dataset
+df_reduced = df_reduced.sample(
+    frac=1,
+    random_state=42
+).reset_index(drop=True)
+
+# =========================================================
+# SAVE
+# =========================================================
+
+df_reduced.to_csv(DATASET_PATH, index=False)
+
+# =========================================================
+# STATS
+# =========================================================
+
+print("\n" + "=" * 60)
+print("[INFO] Dataset reduced successfully!")
+print("=" * 60)
+
+print(f"Total after reduction: {len(df_reduced)}")
+
+print("\nLabel distribution AFTER:")
+print(df_reduced["label"].value_counts())
+
+print("\n✅ Reduced 20% equally from both classes.")
+

@@ -1,3 +1,8 @@
+# =========================================================
+# PHISHGUARD ML TRAINING SCRIPT
+# Huấn luyện mô hình phát hiện URL phishing
+# =========================================================
+
 import os
 import joblib
 import pandas as pd
@@ -15,10 +20,13 @@ from sklearn.metrics import (
 )
 
 # =========================================================
-# PATHS
+# ĐƯỜNG DẪN FILE
 # =========================================================
 
+# File dataset chứa URL + label
 DATA_PATH = os.path.join("data", "dataset.csv")
+
+# File model sau khi train xong
 MODEL_PATH = os.path.join("models", "tfidf_lr.pkl")
 
 # =========================================================
@@ -29,18 +37,21 @@ print("=" * 70)
 print("[INFO] Loading dataset...")
 print("=" * 70)
 
+# Đọc file CSV
 df = pd.read_csv(DATA_PATH)
 
-# Keep only required columns
+# Chỉ giữ 2 cột cần thiết
 df = df[["url", "label"]]
 
-# Remove empty rows
+# Xoá dòng bị null
 df = df.dropna()
 
-# Remove duplicate URLs
+# Xoá URL bị trùng
 df = df.drop_duplicates(subset=["url"])
 
-# Normalize labels
+# Chuẩn hoá label
+# Ví dụ:
+# "Phishing " → "phishing"
 df["label"] = df["label"].str.lower().str.strip()
 
 print(f"[INFO] Dataset loaded successfully")
@@ -50,13 +61,18 @@ print("\n[INFO] Label distribution:")
 print(df["label"].value_counts())
 
 # =========================================================
-# TRAIN / TEST SPLIT
+# CHIA TRAIN / TEST
 # =========================================================
 
 print("\n" + "=" * 70)
 print("[INFO] Splitting dataset...")
 print("=" * 70)
 
+# 80% train
+# 20% test
+#
+# stratify giúp giữ đúng tỉ lệ phishing/safe
+# random_state giúp kết quả luôn giống nhau
 X_train, X_test, y_train, y_test = train_test_split(
     df["url"],
     df["label"],
@@ -76,6 +92,15 @@ print("\n" + "=" * 70)
 print("[INFO] Building ML pipeline...")
 print("=" * 70)
 
+# Pipeline = TF-IDF + Logistic Regression
+#
+# URL
+#   ↓
+# TF-IDF vector
+#   ↓
+# Logistic Regression
+#   ↓
+# phishing / safe
 pipeline = Pipeline([
 
     # =====================================================
@@ -87,28 +112,111 @@ pipeline = Pipeline([
 
         TfidfVectorizer(
 
-            # Keep word-based tokenization
+            # =================================================
+            # analyzer='word'
+            #
+            # Cắt URL theo từ
+            #
+            # Ví dụ:
+            # https://login-paypal-secure.com
+            #
+            # → login
+            # → paypal
+            # → secure
+            #
+            # Dễ hiểu và explainable hơn char-level
+            # =================================================
             analyzer='word',
 
-            # Use unigram + bigram
+            # =================================================
+            # ngram_range=(1,2)
+            #
+            # (1,1) = unigram
+            #   → login
+            #
+            # (1,2) = unigram + bigram
+            #   → login
+            #   → secure
+            #   → login secure
+            #
+            # Giúp model hiểu context tốt hơn
+            #
+            # Accuracy tăng nhẹ
+            # RAM tăng nhẹ
+            # =================================================
             ngram_range=(1, 2),
 
-            # More vocabulary
-            max_features=8000,
+            # =================================================
+            # max_features=8000
+            #
+            # Chỉ giữ 8000 feature quan trọng nhất
+            #
+            # Tăng:
+            #   → Accuracy tăng
+            #   → RAM tăng
+            #   → Train chậm hơn
+            #
+            # Giảm:
+            #   → Train nhanh
+            #   → Model nhẹ
+            # =================================================
+            max_features=5000,
 
-            # Ignore very rare tokens
+            # =================================================
+            # min_df=2
+            #
+            # Bỏ token xuất hiện quá ít
+            #
+            # Ví dụ:
+            # token chỉ xuất hiện 1 lần
+            #
+            # → thường là noise
+            # =================================================
             min_df=2,
 
-            # Ignore too common words
+            # =================================================
+            # max_df=0.95
+            #
+            # Bỏ token xuất hiện quá nhiều
+            #
+            # Ví dụ:
+            # https
+            # www
+            #
+            # Vì các token này không giúp phân loại
+            # =================================================
             max_df=0.95,
 
-            # Better weighting
+            # =================================================
+            # sublinear_tf=True
+            #
+            # Scale TF theo log()
+            #
+            # Giảm ảnh hưởng của từ lặp nhiều lần
+            #
+            # Ví dụ:
+            # login-login-login-login
+            #
+            # Không bị model overreact
+            # =================================================
             sublinear_tf=True,
 
-            # Normalize text
+            # Chuyển hết về lowercase
             lowercase=True,
 
-            # Keep URL structure
+            # =================================================
+            # token_pattern
+            #
+            # Regex để giữ cấu trúc URL
+            #
+            # Giữ:
+            # google.com
+            # login-paypal
+            # secure-update
+            #
+            # Nếu không custom regex:
+            # sklearn sẽ cắt mất dấu . và -
+            # =================================================
             token_pattern=r'(?u)\b[\w.-]+\b'
         )
     ),
@@ -122,19 +230,56 @@ pipeline = Pipeline([
 
         LogisticRegression(
 
-            # More stable convergence
+            # =================================================
+            # max_iter=500
+            #
+            # Số vòng tối ưu gradient descent
+            #
+            # Tăng:
+            #   → hội tụ tốt hơn
+            #   → train lâu hơn
+            #
+            # Nếu quá thấp:
+            #   → model chưa học xong
+            # =================================================
             max_iter=500,
 
-            # Better regularization
+            # =================================================
+            # C=0.7
+            #
+            # Regularization strength
+            #
+            # C nhỏ:
+            #   → model đơn giản hơn
+            #   → ít overfit
+            #
+            # C lớn:
+            #   → model fit mạnh hơn
+            #   → dễ overfit
+            # =================================================
             C=0.7,
 
-            # Better for imbalance
+            # =================================================
+            # class_weight='balanced'
+            #
+            # Tự cân bằng phishing/safe
+            #
+            # Rất quan trọng nếu dataset lệch
+            # =================================================
             class_weight='balanced',
 
-            # Best for sparse TF-IDF
+            # =================================================
+            # solver='liblinear'
+            #
+            # Optimizer cho Logistic Regression
+            #
+            # liblinear:
+            #   → tốt cho text classification
+            #   → ổn định với sparse matrix TF-IDF
+            # =================================================
             solver='liblinear',
 
-            # Reproducible
+            # Giữ kết quả reproducible
             random_state=42
         )
     )
@@ -148,20 +293,22 @@ print("\n" + "=" * 70)
 print("[INFO] Training Logistic Regression model...")
 print("=" * 70)
 
+# Học từ dữ liệu
 pipeline.fit(X_train, y_train)
 
 print("[INFO] Training completed successfully!")
 
 # =========================================================
-# PREDICTIONS
+# TEST MODEL
 # =========================================================
 
+# Predict label
 y_pred = pipeline.predict(X_test)
 
-# Predict probabilities
+# Predict probability
 y_probs = pipeline.predict_proba(X_test)
 
-# Find phishing probability column
+# Lấy index class phishing
 classes = pipeline.named_steps["clf"].classes_
 
 if "phishing" in classes:
@@ -169,9 +316,10 @@ if "phishing" in classes:
 else:
     phishing_idx = 1
 
+# Xác suất phishing
 phishing_probs = y_probs[:, phishing_idx]
 
-# Convert labels to binary
+# Convert label → binary
 binary_y_test = (y_test == "phishing").astype(int)
 
 # =========================================================
@@ -216,37 +364,12 @@ print("\n" + "=" * 70)
 print("[INFO] Saving trained model...")
 print("=" * 70)
 
+# Tạo folder models nếu chưa có
 os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
 
+# Lưu toàn bộ pipeline
 joblib.dump(pipeline, MODEL_PATH)
 
 print(f"[INFO] Pipeline saved to {MODEL_PATH}")
 
-# =========================================================
-# MODEL CONFIGURATION
-# =========================================================
-
-print("\n" + "=" * 70)
-print("[INFO] MODEL CONFIGURATION")
-print("=" * 70)
-
-print("""
-TF-IDF SETTINGS
-----------------------------
-Analyzer        : word
-N-grams         : (1,2)
-Max Features    : 8000
-Min DF          : 2
-Max DF          : 0.95
-Sublinear TF    : True
-
-LOGISTIC REGRESSION
-----------------------------
-Max Iterations  : 500
-C               : 0.7
-Class Weight    : balanced
-Solver          : liblinear
-Random State    : 42
-""")
-
-print("\n✅ High-accuracy phishing detection model training completed!")
+print("\n✅ Training completed successfully!")
