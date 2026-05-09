@@ -111,112 +111,40 @@ pipeline = Pipeline([
         "tfidf",
 
         TfidfVectorizer(
-
-            # =================================================
-            # analyzer='word'
-            #
-            # Cắt URL theo từ
-            #
-            # Ví dụ:
-            # https://login-paypal-secure.com
-            #
-            # → login
-            # → paypal
-            # → secure
-            #
-            # Dễ hiểu và explainable hơn char-level
-            # =================================================
             analyzer='word',
 
-            # =================================================
             # ngram_range=(1,2)
-            #
             # (1,1) = unigram
             #   → login
-            #
             # (1,2) = unigram + bigram
             #   → login
             #   → secure
             #   → login secure
-            #
             # Giúp model hiểu context tốt hơn
-            #
             # Accuracy tăng nhẹ
             # RAM tăng nhẹ
             # =================================================
             ngram_range=(1, 2),
-
-            # =================================================
             # max_features=8000
-            #
             # Chỉ giữ 8000 feature quan trọng nhất
-            #
             # Tăng:
             #   → Accuracy tăng
             #   → RAM tăng
-            #   → Train chậm hơn
-            #
             # Giảm:
             #   → Train nhanh
             #   → Model nhẹ
-            # =================================================
-            max_features=5000,
-
+            max_features=3500,
+            dtype='float32',
             # =================================================
             # min_df=2
-            #
-            # Bỏ token xuất hiện quá ít
-            #
-            # Ví dụ:
-            # token chỉ xuất hiện 1 lần
-            #
-            # → thường là noise
-            # =================================================
             min_df=2,
-
-            # =================================================
-            # max_df=0.95
-            #
             # Bỏ token xuất hiện quá nhiều
-            #
-            # Ví dụ:
-            # https
-            # www
-            #
-            # Vì các token này không giúp phân loại
-            # =================================================
             max_df=0.95,
-
-            # =================================================
-            # sublinear_tf=True
-            #
-            # Scale TF theo log()
-            #
             # Giảm ảnh hưởng của từ lặp nhiều lần
-            #
-            # Ví dụ:
-            # login-login-login-login
-            #
-            # Không bị model overreact
-            # =================================================
             sublinear_tf=True,
-
-            # Chuyển hết về lowercase
             lowercase=True,
 
-            # =================================================
-            # token_pattern
-            #
-            # Regex để giữ cấu trúc URL
-            #
-            # Giữ:
-            # google.com
-            # login-paypal
-            # secure-update
-            #
-            # Nếu không custom regex:
-            # sklearn sẽ cắt mất dấu . và -
-            # =================================================
+            
             token_pattern=r'(?u)\b[\w.-]+\b'
         )
     ),
