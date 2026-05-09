@@ -137,45 +137,182 @@ SEE ALSO:
   • data/dataset.csv - Training data
   • models/tfidf_lr.pkl - Output artifact
 """
-
 import os
+import re
 import joblib
 import pandas as pd
+
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import classification_report, accuracy_score
 
+
 DATA_PATH = os.path.join("data", "dataset.csv")
 MODEL_PATH = os.path.join("models", "tfidf_lr.pkl")
 
+
+# ============================================================
+# URL PREPROCESSING
+# ============================================================
+
+def preprocess_url(url):
+    """
+    Normalize URLs before ML training.
+
+    WHY:
+      - Removes noisy protocol prefixes
+      - Standardizes URLs
+      - Improves TF-IDF quality
+      - Helps model focus on phishing patterns
+
+    Example:
+      https://www.paypal-login.com
+      → paypal-login.com
+    """
+
+    url = str(url).lower()
+
+    # Remove http:// or https://
+    url = re.sub(r"https?://", "", url)
+
+    # Remove www.
+    url = re.sub(r"www\.", "", url)
+
+    return url
+
+
+# ============================================================
+# LOAD DATASET
+# ============================================================
+
 print("[INFO] Loading dataset from", DATA_PATH)
+
 df = pd.read_csv(DATA_PATH)
 
 print("[INFO] Dataset loaded. Total records:", len(df))
+
+print("\n[INFO] Label distribution:")
 print(df["label"].value_counts())
 
+
+# ============================================================
+# PREPROCESS URLs
+# ============================================================
+
+print("\n[INFO] Preprocessing URLs...")
+
+df["url"] = df["url"].apply(preprocess_url)
+
+
+# ============================================================
+# TRAIN / TEST SPLIT
+# ============================================================
+
 X_train, X_test, y_train, y_test = train_test_split(
-    df["url"], df["label"], test_size=0.2, random_state=42
+    df["url"],
+    df["label"],
+    test_size=0.2,
+    random_state=42,
+
+    # IMPORTANT:
+    # Keeps phishing/legitimate ratio balanced
+    stratify=df["label"]
 )
 
-print("[INFO] Training Logistic Regression model...")
+print("\n[INFO] Training Logistic Regression model...")
 
-# Build pipeline (vectorizer + model together)
+
+# ============================================================
+# BUILD PIPELINE
+# ============================================================
+
 pipeline = Pipeline([
-    ("tfidf", TfidfVectorizer(ngram_range=(1, 2), max_features=3500)),
-    ("clf", LogisticRegression(max_iter=200))
+
+    # ========================================================
+    # TF-IDF VECTORIZER
+    # ========================================================
+
+    (
+        "tfidf",
+
+        TfidfVectorizer(
+
+            # Character-level analysis
+            # BEST for phishing URL detection
+            analyzer="char_wb",
+
+            # Character sequences of length 3→5
+            ngram_range=(3, 5),
+
+            # Top features to keep
+            max_features=10000,
+
+            # Ignore ultra-rare patterns
+            min_df=2,
+
+            # Better weighting
+            sublinear_tf=True
+        )
+    ),
+
+    # ========================================================
+    # LOGISTIC REGRESSION CLASSIFIER
+    # ========================================================
+
+    (
+        "clf",
+
+        LogisticRegression(
+
+            # More iterations for convergence
+            max_iter=1000,
+
+            # Better handling of class imbalance
+            class_weight="balanced",
+
+            # Binary classification optimization
+            solver="liblinear",
+
+            # Regularization strength
+            C=0.5
+        )
+    )
 ])
+
+
+# ============================================================
+# TRAIN MODEL
+# ============================================================
 
 pipeline.fit(X_train, y_train)
 
+
+# ============================================================
+# EVALUATE MODEL
+# ============================================================
+
 y_pred = pipeline.predict(X_test)
 
-print("\n[RESULT] Model Performance:")
+print("\n============================================================")
+print("[RESULT] MODEL PERFORMANCE")
+print("============================================================")
+
 print(classification_report(y_test, y_pred))
+
 print("Accuracy:", accuracy_score(y_test, y_pred))
 
-# Save the pipeline (includes both vectorizer + model)
+
+# ============================================================
+# SAVE MODEL
+# ============================================================
+
+os.makedirs("models", exist_ok=True)
+
 joblib.dump(pipeline, MODEL_PATH)
-print(f"[INFO] Pipeline (vectorizer+model) saved to {MODEL_PATH}")
+
+print(f"\n[INFO] Pipeline (vectorizer+model) saved to:")
+print(f"       {MODEL_PATH}")
+
+print("\n[INFO] Training completed successfully!")
