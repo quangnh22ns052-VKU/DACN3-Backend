@@ -65,19 +65,11 @@ class PhishDetector:
         # Try to load existing model
         if os.path.exists(MODEL_PATH):
             try:
-                with warnings.catch_warnings(record=True) as w:
-                    warnings.simplefilter("always")
-                    self.pipeline = joblib.load(MODEL_PATH)
-                    
-                    # Check for version warnings
-                    version_warnings = [warning for warning in w 
-                                      if "InconsistentVersionWarning" in str(warning.category)]
-                    if version_warnings:
-                        logger.warning(f"⚠️  Model version mismatch detected. Retraining...")
-                        self.pipeline = None
-                        
+                self.pipeline = joblib.load(MODEL_PATH)
+                logger.info("✅ ML model loaded successfully")
+
             except Exception as e:
-                logger.warning(f"⚠️  Failed to load model: {str(e)}. Attempting retrain...")
+                logger.error(f"❌ Failed to load model: {e}")
                 self.pipeline = None
         
         # Retrain if load failed
