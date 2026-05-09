@@ -1,4 +1,4 @@
-```python
+
 import os
 import joblib
 import pandas as pd
@@ -251,4 +251,4 @@ Random State    : 42
 """)
 
 print("\n✅ High-accuracy phishing detection model training completed!")
-```
+
