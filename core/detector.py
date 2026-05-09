@@ -82,10 +82,8 @@ class PhishDetector:
         
         # Retrain if load failed
         if self.pipeline is None:
-            raise RuntimeError(
-                "❌ Failed to load trained model. "
-                "Please train locally and upload tfidf_lr.pkl"
-            )
+            logger.info("🔄 Retraining model from data...")
+            self._retrain_model()
     
     def _retrain_model(self):
         """Train new model from dataset"""

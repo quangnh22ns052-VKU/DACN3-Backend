@@ -1,82 +1,50 @@
-﻿# =====================================================
-# STAGE 1 - BUILD DEPENDENCIES
-# =====================================================
-
-FROM python:3.11-slim AS builder
-
+﻿# Multi-stage build for backend
+FROM python:3.9-slim AS builder
 WORKDIR /app
-
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
+RUN apt-get update && apt-get install -y build-essential curl && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
-
 RUN pip install --no-cache-dir --user -r requirements.txt
 
-# =====================================================
-# STAGE 2 - FINAL IMAGE
-# =====================================================
-
-FROM python:3.11-slim
-
+# Final stage
+FROM python:3.9-slim
 WORKDIR /app
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 
-RUN apt-get update && apt-get install -y \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy installed packages
+# Copy builder dependencies (stable layer - cached longer)
 COPY --from=builder /root/.local /root/.local
-
 ENV PATH=/root/.local/bin:$PATH
 
-# =====================================================
-# PYTHON SETTINGS
-# =====================================================
-
+# Set Python to run in unbuffered mode (doesn't affect cache)
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
 # =====================================================
-# APP ENVIRONMENT
+# DEFAULT ENVIRONMENT VARIABLES (Non-sensitive, stable)
+# Render/AWS will override with their own values
 # =====================================================
-
 ENV BACKEND_HOST=0.0.0.0
 ENV BACKEND_PORT=8000
+ENV ALGORITHM=HS256
+ENV ACCESS_TOKEN_EXPIRE_MINUTES=30
 ENV LOG_LEVEL=INFO
-ENV ENVIRONMENT=production
+ENV ENVIRONMENT=development
+ENV DB_POOL_SIZE=10
+ENV DB_MAX_OVERFLOW=20
+ENV DB_POOL_RECYCLE=3600
 
-# =====================================================
-# COPY SOURCE CODE
-# =====================================================
-
+# Copy application code (volatile layer - changes frequently, goes last)
 COPY backend/ ./backend/
 COPY core/ ./core/
 COPY models/ ./models/
 COPY data/ ./data/
-
-# KHÔNG copy scripts lên production
-# COPY scripts/ ./scripts/
-
+COPY scripts/ ./scripts/
 RUN mkdir -p logs
-
-# =====================================================
-# PORT
-# =====================================================
 
 EXPOSE 8000
 
-# =====================================================
-# HEALTH CHECK
-# =====================================================
-
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+# Health check - Increased start-period for Render cold start
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
   CMD curl --fail http://localhost:8000/health || exit 1
 
-# =====================================================
-# START SERVER
-# =====================================================
-
+# Run application
 CMD ["uvicorn", "backend.api:app", "--host", "0.0.0.0", "--port", "8000"]
