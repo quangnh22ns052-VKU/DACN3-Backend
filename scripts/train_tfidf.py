@@ -1,39 +1,3 @@
-"""
-╔═══════════════════════════════════════════════════════════════════╗
-║           PHISHGUARD ML MODEL TRAINING SCRIPT                    ║
-║      🔨 Train TF-IDF + Logistic Regression Model                ║
-╚═══════════════════════════════════════════════════════════════════╝
-
-TÊN FILE: scripts/train_tfidf.py
-
-CÔNG DỤNG:
-  - Huấn luyện mô hình ML từ bộ dữ liệu (data/dataset.csv)
-  - Xây dựng pipeline: TF-IDF vectorizer → Logistic Regression
-  - Lưu mô hình đã huấn luyện vào models/tfidf_lr.pkl
-  - Đánh giá hiệu suất: accuracy, precision, recall, F1
-  - In báo cáo phân loại chi tiết
-
-INPUT:
-  • data/dataset.csv: Bộ dữ liệu huấn luyện
-    Format: URL, label (phishing hoặc safe)
-    Ví dụ:
-    https://verify-amazon.click,phishing
-    https://amazon.com,safe
-
-OUTPUT:
-  • models/tfidf_lr.pkl: Mô hình đã huấn luyện
-
-CÁCH CHẠY:
-  python scripts/train_tfidf.py
-
-OPTIMIZED FOR:
-  ✅ High Accuracy
-  ✅ Better Phishing Detection
-  ✅ Typo Domain Detection
-  ✅ Fake Login URL Detection
-  ✅ Obfuscated URL Detection
-"""
-
 import os
 import joblib
 import pandas as pd
@@ -67,7 +31,7 @@ print("=" * 70)
 
 df = pd.read_csv(DATA_PATH)
 
-# Keep required columns only
+# Keep only required columns
 df = df[["url", "label"]]
 
 # Remove empty rows
@@ -123,32 +87,34 @@ pipeline = Pipeline([
 
         TfidfVectorizer(
 
-            # Character-level analysis
-            analyzer='char_wb',
+            # Keep word-based tokenization
+            analyzer='word',
 
-            # Character n-grams
-            ngram_range=(3, 5),
+            # Use unigram + bigram
+            ngram_range=(1, 2),
 
-            # Vocabulary size
-            max_features=15000,
+            # More vocabulary
+            max_features=8000,
 
-            # Ignore extremely rare patterns
+            # Ignore very rare tokens
             min_df=2,
 
-            # Ignore extremely common patterns
+            # Ignore too common words
             max_df=0.95,
 
-            # Better TF scaling
+            # Better weighting
             sublinear_tf=True,
 
             # Normalize text
             lowercase=True,
-            strip_accents='unicode'
+
+            # Keep URL structure
+            token_pattern=r'(?u)\b[\w.-]+\b'
         )
     ),
 
     # =====================================================
-    # LOGISTIC REGRESSION CLASSIFIER
+    # LOGISTIC REGRESSION
     # =====================================================
 
     (
@@ -156,19 +122,19 @@ pipeline = Pipeline([
 
         LogisticRegression(
 
-            # More optimization iterations
-            max_iter=1000,
+            # More stable convergence
+            max_iter=500,
 
-            # Better generalization
-            C=0.5,
+            # Better regularization
+            C=0.7,
 
-            # Handle imbalanced datasets
+            # Better for imbalance
             class_weight='balanced',
 
-            # Better for sparse text classification
+            # Best for sparse TF-IDF
             solver='liblinear',
 
-            # Reproducible results
+            # Reproducible
             random_state=42
         )
     )
@@ -216,11 +182,9 @@ print("\n" + "=" * 70)
 print("[RESULT] MODEL PERFORMANCE")
 print("=" * 70)
 
-# Accuracy
 accuracy = accuracy_score(y_test, y_pred)
 print(f"Accuracy : {accuracy:.4f}")
 
-# ROC-AUC
 roc_auc = roc_auc_score(binary_y_test, phishing_probs)
 print(f"ROC-AUC  : {roc_auc:.4f}")
 
@@ -252,14 +216,11 @@ print("\n" + "=" * 70)
 print("[INFO] Saving trained model...")
 print("=" * 70)
 
-# Create models directory if missing
 os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
 
-# Save full pipeline
 joblib.dump(pipeline, MODEL_PATH)
 
-print(f"[INFO] Pipeline saved to:")
-print(f"[INFO] Pipeline (vectorizer+model) saved to {MODEL_PATH}")
+print(f"[INFO] Pipeline saved to {MODEL_PATH}")
 
 # =========================================================
 # MODEL CONFIGURATION
@@ -272,21 +233,20 @@ print("=" * 70)
 print("""
 TF-IDF SETTINGS
 ----------------------------
-Analyzer        : char_wb
-N-grams         : (3,5)
-Max Features    : 15000
+Analyzer        : word
+N-grams         : (1,2)
+Max Features    : 8000
 Min DF          : 2
 Max DF          : 0.95
 Sublinear TF    : True
 
 LOGISTIC REGRESSION
 ----------------------------
-Max Iterations  : 1000
-C               : 0.5
+Max Iterations  : 500
+C               : 0.7
 Class Weight    : balanced
 Solver          : liblinear
 Random State    : 42
 """)
 
 print("\n✅ High-accuracy phishing detection model training completed!")
-
