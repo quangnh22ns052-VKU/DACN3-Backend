@@ -173,31 +173,54 @@ if backup_engine:
 
 def get_db_session():
     """Get database session with automatic failover support"""
+    
     if DatabaseStatus.primary_active:
         try:
             session = SessionLocal()
-            # Test the connection
             session.execute(text("SELECT 1"))
+            session.commit()  # ✅ Thêm commit để clear transaction state
             return session
         except Exception as e:
-            logger.warning(f"⚠️  Primary database failed: {str(e)}")
-            if backup_engine and DB_FAILOVER_ENABLED:
+            logger.warning(f"⚠️ Primary database failed: {str(e)}")
+            try:
+                session.close()
+            except:
+                pass
+            
+            if backup_engine and SessionLocalBackup and DB_FAILOVER_ENABLED:
                 DatabaseStatus.switch_to_backup()
-                return SessionLocalBackup()
+                logger.warning("🔄 SWITCHED TO BACKUP DATABASE (Supabase)")
+                try:
+                    backup_session = SessionLocalBackup()
+                    backup_session.execute(text("SELECT 1"))
+                    backup_session.commit()
+                    return backup_session
+                except Exception as e2:
+                    logger.error(f"❌ Backup database also failed: {str(e2)}")
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Cả hai database đều không khả dụng"
+                    )
             else:
                 raise
     else:
-        # Using backup database
+        # Đang dùng Backup
         try:
             session = SessionLocalBackup()
             session.execute(text("SELECT 1"))
+            session.commit()
             return session
         except Exception as e:
-            logger.warning(f"⚠️  Backup database failed: {str(e)}")
-            # Try to switch back to primary
+            logger.warning(f"⚠️ Backup database failed, switching back to primary: {str(e)}")
+            try:
+                session.close()
+            except:
+                pass
             DatabaseStatus.switch_to_primary()
-            return SessionLocal()
-
+            primary_session = SessionLocal()
+            primary_session.execute(text("SELECT 1"))
+            primary_session.commit()
+            return primary_session
 # =====================================================
 # BASE CLASS FOR ORM MODELS
 # =====================================================
