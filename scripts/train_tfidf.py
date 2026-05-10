@@ -1,254 +1,173 @@
-
 import os
 import joblib
 import pandas as pd
+import numpy as np
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_score
 from sklearn.pipeline import Pipeline
-
+from sklearn.utils import resample
 from sklearn.metrics import (
     classification_report,
     accuracy_score,
     roc_auc_score,
-    confusion_matrix
+    confusion_matrix,
+    f1_score,
+    precision_score,
+    recall_score
 )
-
-# =========================================================
-# PATHS
-# =========================================================
 
 DATA_PATH = os.path.join("data", "dataset.csv")
 MODEL_PATH = os.path.join("models", "tfidf_lr.pkl")
 
 # =========================================================
-# LOAD DATASET
+# LOAD & CLEAN
 # =========================================================
-
 print("=" * 70)
 print("[INFO] Loading dataset...")
-print("=" * 70)
-
 df = pd.read_csv(DATA_PATH)
-
-# Keep only required columns
-df = df[["url", "label"]]
-
-# Remove empty rows
-df = df.dropna()
-
-# Remove duplicate URLs
-df = df.drop_duplicates(subset=["url"])
-
-# Normalize labels
+df = df[["url", "label"]].dropna().drop_duplicates(subset=["url"])
 df["label"] = df["label"].str.lower().str.strip()
 
-print(f"[INFO] Dataset loaded successfully")
 print(f"[INFO] Total records: {len(df)}")
-
-print("\n[INFO] Label distribution:")
+print("\n[INFO] Label distribution (before balance):")
 print(df["label"].value_counts())
+print(df["label"].value_counts(normalize=True).mul(100).round(1).astype(str) + "%")
 
 # =========================================================
-# TRAIN / TEST SPLIT
+# BALANCE DATASET — undersample safe + oversample phishing
 # =========================================================
-
 print("\n" + "=" * 70)
-print("[INFO] Splitting dataset...")
-print("=" * 70)
+print("[INFO] Balancing dataset...")
 
-X_train, X_test, y_train, y_test = train_test_split(
-    df["url"],
-    df["label"],
-    test_size=0.2,
-    stratify=df["label"],
+df_phishing = df[df["label"] == "phishing"]
+df_safe     = df[df["label"] == "safe"]
+
+# Target: 60,000 mỗi class
+TARGET = 60_000
+
+# Oversample phishing nếu thiếu
+df_phishing_balanced = resample(
+    df_phishing,
+    replace=True,
+    n_samples=TARGET,
     random_state=42
 )
 
-print(f"[INFO] Training samples: {len(X_train)}")
-print(f"[INFO] Testing samples : {len(X_test)}")
+# Undersample safe
+df_safe_balanced = resample(
+    df_safe,
+    replace=False,
+    n_samples=TARGET,
+    random_state=42
+)
+
+df_balanced = pd.concat([df_phishing_balanced, df_safe_balanced]).sample(
+    frac=1, random_state=42
+).reset_index(drop=True)
+
+print(f"[INFO] Balanced dataset: {len(df_balanced)} records")
+print(df_balanced["label"].value_counts())
 
 # =========================================================
-# BUILD PIPELINE
+# TRAIN / TEST SPLIT — stratified
 # =========================================================
+X_train, X_test, y_train, y_test = train_test_split(
+    df_balanced["url"],
+    df_balanced["label"],
+    test_size=0.2,
+    stratify=df_balanced["label"],
+    random_state=42
+)
 
-print("\n" + "=" * 70)
-print("[INFO] Building ML pipeline...")
-print("=" * 70)
+print(f"\n[INFO] Train: {len(X_train)} | Test: {len(X_test)}")
 
+# =========================================================
+# PIPELINE
+# =========================================================
 pipeline = Pipeline([
-
-    # =====================================================
-    # TF-IDF VECTORIZER
-    # =====================================================
-
-    (
-        "tfidf",
-
-        TfidfVectorizer(
-
-            # Keep word-based tokenization
-            analyzer='word',
-
-            # Use unigram + bigram
-            ngram_range=(1, 2),
-
-            # More vocabulary
-            max_features=8000,
-
-            # Ignore very rare tokens
-            min_df=2,
-
-            # Ignore too common words
-            max_df=0.95,
-
-            # Better weighting
-            sublinear_tf=True,
-
-            # Normalize text
-            lowercase=True,
-
-            # Keep URL structure
-            token_pattern=r'(?u)\b[\w.-]+\b'
-        )
-    ),
-
-    # =====================================================
-    # LOGISTIC REGRESSION
-    # =====================================================
-
-    (
-        "clf",
-
-        LogisticRegression(
-
-            # More stable convergence
-            max_iter=500,
-
-            # Better regularization
-            C=0.7,
-
-            # Better for imbalance
-            class_weight='balanced',
-
-            # Best for sparse TF-IDF
-            solver='liblinear',
-
-            # Reproducible
-            random_state=42
-        )
-    )
+    ("tfidf", TfidfVectorizer(
+        analyzer='word',
+        ngram_range=(1, 2),       # giảm từ (1,3) xuống để tránh overfit
+        max_features=8000,        # tăng từ 5000 để bắt nhiều pattern hơn
+        min_df=2,
+        max_df=0.95,
+        sublinear_tf=True,        # log(1+tf) thay vì tf thuần — giảm ảnh hưởng từ lặp nhiều
+        lowercase=True,
+        token_pattern=r'(?u)\b[\w.-]+\b'
+    )),
+    ("clf", LogisticRegression(
+        max_iter=1000,
+        C=0.5,                    # tăng regularization (giảm C) để giảm overfit
+        class_weight='balanced',  # tự động cân bằng class weight trong loss
+        solver='liblinear',
+        random_state=42
+    ))
 ])
 
 # =========================================================
-# TRAIN MODEL
+# CROSS-VALIDATION trước khi train chính thức
 # =========================================================
-
 print("\n" + "=" * 70)
-print("[INFO] Training Logistic Regression model...")
-print("=" * 70)
+print("[INFO] Running 5-fold cross-validation...")
 
+cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+cv_scores = cross_val_score(pipeline, X_train, y_train, cv=cv, scoring='f1_macro', n_jobs=-1)
+
+print(f"[CV] F1-macro per fold: {[round(s,4) for s in cv_scores]}")
+print(f"[CV] Mean: {cv_scores.mean():.4f} | Std: {cv_scores.std():.4f}")
+
+if cv_scores.std() > 0.01:
+    print("[WARN] Std cao — có thể đang overfit hoặc data noise")
+
+# =========================================================
+# TRAIN CHÍNH THỨC
+# =========================================================
+print("\n" + "=" * 70)
+print("[INFO] Training final model...")
 pipeline.fit(X_train, y_train)
-
-print("[INFO] Training completed successfully!")
-
-# =========================================================
-# PREDICTIONS
-# =========================================================
-
-y_pred = pipeline.predict(X_test)
-
-# Predict probabilities
-y_probs = pipeline.predict_proba(X_test)
-
-# Find phishing probability column
-classes = pipeline.named_steps["clf"].classes_
-
-if "phishing" in classes:
-    phishing_idx = list(classes).index("phishing")
-else:
-    phishing_idx = 1
-
-phishing_probs = y_probs[:, phishing_idx]
-
-# Convert labels to binary
-binary_y_test = (y_test == "phishing").astype(int)
+print("[INFO] Training completed!")
 
 # =========================================================
 # EVALUATION
 # =========================================================
+y_pred  = pipeline.predict(X_test)
+y_probs = pipeline.predict_proba(X_test)
+
+classes = pipeline.named_steps["clf"].classes_
+phishing_idx   = list(classes).index("phishing") if "phishing" in classes else 1
+phishing_probs = y_probs[:, phishing_idx]
+binary_y_test  = (y_test == "phishing").astype(int)
 
 print("\n" + "=" * 70)
 print("[RESULT] MODEL PERFORMANCE")
 print("=" * 70)
-
-accuracy = accuracy_score(y_test, y_pred)
-print(f"Accuracy : {accuracy:.4f}")
-
-roc_auc = roc_auc_score(binary_y_test, phishing_probs)
-print(f"ROC-AUC  : {roc_auc:.4f}")
-
-# =========================================================
-# CLASSIFICATION REPORT
-# =========================================================
+print(f"Accuracy  : {accuracy_score(y_test, y_pred):.4f}")
+print(f"ROC-AUC   : {roc_auc_score(binary_y_test, phishing_probs):.4f}")
+print(f"F1-macro  : {f1_score(y_test, y_pred, average='macro'):.4f}")
+print(f"Precision : {precision_score(y_test, y_pred, pos_label='phishing'):.4f}")
+print(f"Recall    : {recall_score(y_test, y_pred, pos_label='phishing'):.4f}")
 
 print("\n" + "=" * 70)
 print("[REPORT] Classification Report")
-print("=" * 70)
-
 print(classification_report(y_test, y_pred))
 
-# =========================================================
-# CONFUSION MATRIX
-# =========================================================
-
-print("\n" + "=" * 70)
+cm = confusion_matrix(y_test, y_pred)
 print("[REPORT] Confusion Matrix")
-print("=" * 70)
+print(cm)
 
-print(confusion_matrix(y_test, y_pred))
+tn, fp, fn, tp = cm.ravel()
+print(f"\n  True Positive  (phishing đúng) : {tp}")
+print(f"  False Negative (phishing bỏ sót): {fn}  ← quan trọng nhất")
+print(f"  False Positive (safe nhầm)      : {fp}")
+print(f"  True Negative  (safe đúng)      : {tn}")
+print(f"\n  False Negative Rate: {fn/(fn+tp)*100:.2f}%  (mục tiêu < 5%)")
 
 # =========================================================
-# SAVE MODEL
+# SAVE
 # =========================================================
-
-print("\n" + "=" * 70)
-print("[INFO] Saving trained model...")
-print("=" * 70)
-
 os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
-
 joblib.dump(pipeline, MODEL_PATH)
-
-print(f"[INFO] Pipeline saved to {MODEL_PATH}")
-
-# =========================================================
-# MODEL CONFIGURATION
-# =========================================================
-
-print("\n" + "=" * 70)
-print("[INFO] MODEL CONFIGURATION")
-print("=" * 70)
-
-print("""
-TF-IDF SETTINGS
-----------------------------
-Analyzer        : word
-N-grams         : (1,2)
-Max Features    : 8000
-Min DF          : 2
-Max DF          : 0.95
-Sublinear TF    : True
-
-LOGISTIC REGRESSION
-----------------------------
-Max Iterations  : 500
-C               : 0.7
-Class Weight    : balanced
-Solver          : liblinear
-Random State    : 42
-""")
-
-print("\n✅ High-accuracy phishing detection model training completed!")
-
+print(f"\n[INFO] Model saved to {MODEL_PATH}")
+print("✅ Done!")

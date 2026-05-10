@@ -122,15 +122,15 @@ def scan_url_or_text(
     user_id = user_info.get("user_id", "anonymous")
 
     # --- 2. Kiểm tra rate limit -----------------------------------
-    if not check_rate_limit(user_id):
-        log_rate_limit_exceeded(user_id=user_id, request_id=request_id)
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail={
-                "code": "RATE_LIMIT_EXCEEDED",
-                "message": "Bạn đã gửi quá nhiều yêu cầu. Vui lòng thử lại sau.",
-            },
-        )
+    # if not check_rate_limit(user_id):
+    #     log_rate_limit_exceeded(user_id=user_id, request_id=request_id)
+    #     raise HTTPException(
+    #         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+    #         detail={
+    #             "code": "RATE_LIMIT_EXCEEDED",
+    #             "message": "Bạn đã gửi quá nhiều yêu cầu. Vui lòng thử lại sau.",
+    #         },
+    #     )
 
     # --- 3. Xác định loại đầu vào --------------------------------
     input_type = (
