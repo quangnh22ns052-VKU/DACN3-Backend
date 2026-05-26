@@ -118,10 +118,6 @@ class DatabaseSync:
                 SyncStats.sync_status = "success"
                 
                 logger.info(f"✅ Database sync completed: {total_rows} rows synced")
-                
-                # Print summary after sync
-                print_database_summary()
-                
                 return True
                 
             finally:
