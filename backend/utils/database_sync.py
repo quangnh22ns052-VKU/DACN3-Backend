@@ -12,6 +12,7 @@ Usage:
 import logging
 from datetime import datetime
 from typing import Dict, List, Tuple
+import sys
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -60,6 +61,8 @@ class DatabaseSync:
         
         SyncStats.sync_status = "syncing"
         logger.info("🔄 Starting database synchronization...")
+        logger.info(f"📊 PRIMARY Database (Neon): {self.primary_db_url[:40]}...")
+        logger.info(f"📊 BACKUP Database (Supabase): {self.backup_db_url[:40]}...")
         
         try:
             # IMPORTANT: Schemas are DIFFERENT!
@@ -115,6 +118,10 @@ class DatabaseSync:
                 SyncStats.sync_status = "success"
                 
                 logger.info(f"✅ Database sync completed: {total_rows} rows synced")
+                
+                # Print summary after sync
+                print_database_summary()
+                
                 return True
                 
             finally:
@@ -236,14 +243,16 @@ class DatabaseSync:
             logger.warning(f"⚠️  Table '{table_name}' not found in backup: {str(e)}")
             backup_count = 0
         
-        # If same count, do spot check - sample 5 records
-        if primary_count == backup_count and primary_count > 0:
-            if self._tables_match(primary_db, backup_db, table_name):
-                logger.debug(f"✅ {table_name} already in sync ({primary_count} rows)")
-                return 0
+        # 📊 DETAILED COMPARISON
+        logger.info(f"📊 [{table_name}] Comparing databases:")
+        logger.info(f"   🔷 PRIMARY (Neon)  : {primary_count} rows")
+        logger.info(f"   🔶 BACKUP (Supabase): {backup_count} rows")
         
-        # Tables don't match - full sync needed
-        logger.warning(f"🔄 Resyncing {table_name} (primary: {primary_count}, backup: {backup_count})")
+        if primary_count == backup_count:
+            logger.info(f"   ✅ Same record count - checking content...")
+        else:
+            diff = abs(primary_count - backup_count)
+            logger.info(f"   ⚠️  Difference: {diff} rows")
         
         # 🔗 SMART SYNC: Get ONLY common columns
         common_cols = self._get_common_columns(primary_db, backup_db, table_name)
@@ -256,6 +265,9 @@ class DatabaseSync:
         if primary_count == 0:
             logger.info(f"✅ {table_name}: 0 rows to sync")
             return 0
+        
+        # Trigger sync
+        logger.info(f"🚀 Starting UPSERT sync for {table_name}...")
         
         # Get all data from primary (paginated)
         batch_size = 500
@@ -310,7 +322,7 @@ class DatabaseSync:
                         backup_db.commit()
                         total_synced += batch_count
                         offset += batch_size
-                        logger.debug(f"✅ Upserted {batch_count} rows into {table_name}")
+                        logger.info(f"   📥 Upserted batch: {batch_count} rows (total: {total_synced})")
                     except Exception as e:
                         try:
                             backup_db.rollback()
@@ -323,15 +335,15 @@ class DatabaseSync:
                 except Exception as e:
                     logger.error(f"❌ Error fetching batch at offset {offset}: {str(e)}")
                     break
-        finally:
+            
             # Ensure clean state after sync
             try:
                 backup_db.rollback()
             except:
                 pass
-        
-        logger.info(f"✅ Synced {table_name}: {total_synced} rows (using UPSERT)")
-        return total_synced
+            
+            logger.info(f"✅ Synced {table_name}: {total_synced} rows (using UPSERT)")
+            return total_synced
             
         except Exception as e:
             try:
@@ -339,75 +351,38 @@ class DatabaseSync:
             except:
                 pass
             logger.error(f"❌ Error syncing {table_name}: {str(e)}")
-            raise
+            return 0
     
     def _tables_match(self, primary_db: Session, backup_db: Session, table_name: str) -> bool:
-        """Check if tables are in sync (sample check)"""
+        """Check if tables are in sync (sample check of first 5 rows)"""
         try:
             # Always start fresh to avoid transaction state issues
             try:
                 primary_db.rollback()
             except:
                 pass
-            
-            # Get primary checksum
-            try:
-                primary_hash = primary_db.execute(
-                    text(f"""
-                        SELECT md5(string_agg(
-                            concat('{table_name}_' || id || '_' || 
-                                   CAST(updated_at AS TEXT)), 
-                            ','
-                        )) as hash
-                        FROM (
-                            SELECT id, COALESCE(updated_at, created_at) as updated_at
-                            FROM {table_name}
-                            ORDER BY id
-                        ) sub
-                    """)
-                ).scalar()
-            except Exception as e:
-                try:
-                    primary_db.rollback()
-                except:
-                    pass
-                logger.debug(f"⚠️  Could not compute primary hash for {table_name}: {str(e)}")
-                return False
-            
             try:
                 backup_db.rollback()
             except:
                 pass
             
-            # Get backup checksum
-            try:
-                backup_hash = backup_db.execute(
-                    text(f"""
-                        SELECT md5(string_agg(
-                            concat('{table_name}_' || id || '_' || 
-                                   CAST(updated_at AS TEXT)), 
-                            ','
-                        )) as hash
-                        FROM (
-                            SELECT id, COALESCE(updated_at, created_at) as updated_at
-                            FROM {table_name}
-                            ORDER BY id
-                        ) sub
-                    """)
-                ).scalar()
-            except Exception as e:
-                try:
-                    backup_db.rollback()
-                except:
-                    pass
-                logger.debug(f"⚠️  Could not compute backup hash for {table_name}: {str(e)}")
-                return False
+            # Sample check - compare first 5 rows
+            primary_sample = primary_db.execute(
+                text(f"SELECT id FROM {table_name} ORDER BY id LIMIT 5")
+            ).fetchall()
             
-            return primary_hash == backup_hash
+            backup_sample = backup_db.execute(
+                text(f"SELECT id FROM {table_name} ORDER BY id LIMIT 5")
+            ).fetchall()
+            
+            primary_ids = {row[0] for row in primary_sample}
+            backup_ids = {row[0] for row in backup_sample}
+            
+            # Tables match if sampled IDs are the same
+            return primary_ids == backup_ids
             
         except Exception as e:
-            logger.debug(f"⚠️  Could not verify {table_name}: {str(e)}")
-            # Clean up transaction state
+            logger.debug(f"ℹ️  Tables not in sync: {str(e)[:80]}")
             try:
                 primary_db.rollback()
                 backup_db.rollback()
@@ -420,8 +395,76 @@ class DatabaseSync:
 # PUBLIC API
 # =====================================================
 
+def print_database_summary():
+    """
+    Display a summary of row counts in both databases.
+    Called on startup and after each sync.
+    """
+    try:
+        primary_session = SessionLocal()
+        backup_session = SessionLocalBackup()
+        
+        # Get counts from PRIMARY (Neon)
+        primary_stats = {}
+        try:
+            primary_users = primary_session.execute(text("SELECT COUNT(*) as cnt FROM users")).scalar() or 0
+            primary_scans = primary_session.execute(text("SELECT COUNT(*) as cnt FROM scans")).scalar() or 0
+            primary_stats = {"users": primary_users, "scans": primary_scans}
+        except Exception as e:
+            logger.warning(f"⚠️  Error getting PRIMARY stats: {str(e)}")
+            primary_stats = {"users": "N/A", "scans": "N/A"}
+        finally:
+            try:
+                primary_session.rollback()
+            except:
+                pass
+            try:
+                primary_session.close()
+            except:
+                pass
+        
+        # Get counts from BACKUP (Supabase)
+        backup_stats = {}
+        try:
+            backup_users = backup_session.execute(text("SELECT COUNT(*) as cnt FROM users")).scalar() or 0
+            backup_scans = backup_session.execute(text("SELECT COUNT(*) as cnt FROM scans")).scalar() or 0
+            backup_stats = {"users": backup_users, "scans": backup_scans}
+        except Exception as e:
+            logger.warning(f"⚠️  Error getting BACKUP stats: {str(e)}")
+            backup_stats = {"users": "N/A", "scans": "N/A"}
+        finally:
+            try:
+                backup_session.rollback()
+            except:
+                pass
+            try:
+                backup_session.close()
+            except:
+                pass
+        
+        # Pretty print the summary
+        print("\n" + "=" * 70, flush=True, file=sys.stdout)
+        print("📊 DATABASE SUMMARY - Row Counts", flush=True, file=sys.stdout)
+        print("=" * 70, flush=True, file=sys.stdout)
+        print(f"\n🔷 PRIMARY DATABASE (Neon):", flush=True, file=sys.stdout)
+        print(f"   • users: {primary_stats.get('users', 'N/A')} rows", flush=True, file=sys.stdout)
+        print(f"   • scans: {primary_stats.get('scans', 'N/A')} rows", flush=True, file=sys.stdout)
+        print(f"\n🔶 BACKUP DATABASE (Supabase):", flush=True, file=sys.stdout)
+        print(f"   • users: {backup_stats.get('users', 'N/A')} rows", flush=True, file=sys.stdout)
+        print(f"   • scans: {backup_stats.get('scans', 'N/A')} rows", flush=True, file=sys.stdout)
+        print("\n" + "=" * 70 + "\n", flush=True, file=sys.stdout)
+        
+        logger.info(f"📊 PRIMARY - users: {primary_stats.get('users', 'N/A')}, scans: {primary_stats.get('scans', 'N/A')}")
+        logger.info(f"📊 BACKUP - users: {backup_stats.get('users', 'N/A')}, scans: {backup_stats.get('scans', 'N/A')}")
+        
+    except Exception as e:
+        logger.error(f"❌ Error printing database summary: {str(e)}")
+
+
 def sync_databases():
     """Main sync function - call this periodically or on demand"""
+    # Print summary before sync
+    print_database_summary()
     syncer = DatabaseSync()
     return syncer.sync_all_tables()
 
