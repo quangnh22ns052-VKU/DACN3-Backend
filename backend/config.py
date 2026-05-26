@@ -56,7 +56,7 @@ class Config:
     
     # Database Sync Settings
     DB_SYNC_ENABLED = os.getenv("DB_SYNC_ENABLED", "true").lower() == "true"
-    DB_SYNC_INTERVAL = int(os.getenv("DB_SYNC_INTERVAL", "30"))  # 5 minutes
+    DB_SYNC_INTERVAL = int(os.getenv("DB_SYNC_INTERVAL", "60"))  # 1 minute (configurable via DB_SYNC_INTERVAL env var)
     DB_FAILOVER_ENABLED = os.getenv("DB_FAILOVER_ENABLED", "true").lower() == "true"
     
     # =====================================================

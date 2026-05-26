@@ -50,16 +50,18 @@ async def background_sync_worker():
     logger.info("🔄 Database sync worker started")
     print("🔄 Database sync worker started", flush=True, file=sys.stdout)
     
-    await asyncio.sleep(5)  # Wait 5 seconds after startup before first sync
-    
     while True:
         try:
             # Import here to avoid circular imports
             from backend.utils.database_sync import sync_databases
+            from datetime import datetime
             
             sync_interval = Config.DB_SYNC_INTERVAL or 300  # Default 5 minutes
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
-            logger.info(f"🔄 Running periodic database sync (interval: {sync_interval}s)")
+            logger.info(f"🔄 Running periodic database sync (interval: {sync_interval}s) [🕐 {current_time}]")
+            print(f"🔄 Running periodic database sync (interval: {sync_interval}s) [🕐 {current_time}]", flush=True, file=sys.stdout)
+            
             sync_databases()
             
             # Sleep for the configured interval
@@ -151,6 +153,14 @@ async def startup_event():
     
     if Config.DB_SYNC_ENABLED and Config.DATABASE_URL_BACKUP:
         try:
+            # 🚀 TRIGGER FIRST SYNC IMMEDIATELY ON STARTUP
+            logger.info("🔄 Triggering immediate database sync on startup...")
+            print("🔄 Triggering immediate database sync on startup...", flush=True, file=sys.stdout)
+            from backend.utils.database_sync import sync_databases, print_database_summary
+            sync_databases()
+            print("✅ Initial sync completed", flush=True, file=sys.stdout)
+            print_database_summary()  # Show summary after startup sync
+            
             background_sync_task = asyncio.create_task(background_sync_worker())
             logger.info("✅ Background database sync task started")
             print("✅ Background database sync task started", flush=True, file=sys.stdout)

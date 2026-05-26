@@ -400,6 +400,9 @@ def print_database_summary():
     Display a summary of row counts in both databases.
     Called on startup and after each sync.
     """
+    from datetime import datetime
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
     try:
         primary_session = SessionLocal()
         backup_session = SessionLocalBackup()
@@ -444,7 +447,7 @@ def print_database_summary():
         
         # Pretty print the summary
         print("\n" + "=" * 70, flush=True, file=sys.stdout)
-        print("📊 DATABASE SUMMARY - Row Counts", flush=True, file=sys.stdout)
+        print(f"📊 DATABASE SUMMARY - Row Counts [🕐 {current_time}]", flush=True, file=sys.stdout)
         print("=" * 70, flush=True, file=sys.stdout)
         print(f"\n🔷 PRIMARY DATABASE (Neon):", flush=True, file=sys.stdout)
         print(f"   • users: {primary_stats.get('users', 'N/A')} rows", flush=True, file=sys.stdout)
@@ -454,8 +457,8 @@ def print_database_summary():
         print(f"   • scans: {backup_stats.get('scans', 'N/A')} rows", flush=True, file=sys.stdout)
         print("\n" + "=" * 70 + "\n", flush=True, file=sys.stdout)
         
-        logger.info(f"📊 PRIMARY - users: {primary_stats.get('users', 'N/A')}, scans: {primary_stats.get('scans', 'N/A')}")
-        logger.info(f"📊 BACKUP - users: {backup_stats.get('users', 'N/A')}, scans: {backup_stats.get('scans', 'N/A')}")
+        logger.info(f"📊 [{current_time}] PRIMARY - users: {primary_stats.get('users', 'N/A')}, scans: {primary_stats.get('scans', 'N/A')}")
+        logger.info(f"📊 [{current_time}] BACKUP - users: {backup_stats.get('users', 'N/A')}, scans: {backup_stats.get('scans', 'N/A')}")
         
     except Exception as e:
         logger.error(f"❌ Error printing database summary: {str(e)}")
