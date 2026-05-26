@@ -62,8 +62,13 @@ class DatabaseSync:
         logger.info("🔄 Starting database synchronization...")
         
         try:
-            # Only sync tables that exist (scans table has data)
-            tables = ["scans"]  # Only sync scans - other tables empty
+            # IMPORTANT: Schemas are DIFFERENT!
+            # PRIMARY (Neon): 7 columns, id=INTEGER
+            # BACKUP (Supabase): 43 columns, id=UUID + auth columns
+            # 
+            # Strategy: Sync ONLY common columns that exist in BOTH databases
+            # This handles schema differences gracefully
+            tables = ["users", "scans"]
             
             total_rows = 0
             
@@ -136,11 +141,67 @@ class DatabaseSync:
             logger.error(f"❌ Database sync failed: {str(e)}")
             return False
     
+    def _get_common_columns(self, primary_db: Session, backup_db: Session, table_name: str) -> List[str]:
+        """Get columns that exist in BOTH databases (handles schema differences)"""
+        try:
+            # Get columns from PRIMARY
+            primary_cols = primary_db.execute(
+                text(f"""
+                    SELECT column_name 
+                    FROM information_schema.columns
+                    WHERE table_name = :table_name
+                    AND table_schema = 'public'
+                    ORDER BY ordinal_position
+                """),
+                {"table_name": table_name}
+            ).fetchall()
+            primary_col_names = {row[0] for row in primary_cols}
+        except Exception as e:
+            logger.error(f"❌ Failed to get PRIMARY columns for {table_name}: {str(e)}")
+            try:
+                primary_db.rollback()
+            except:
+                pass
+            return []
+        
+        try:
+            # Get columns from BACKUP
+            backup_cols = backup_db.execute(
+                text(f"""
+                    SELECT column_name 
+                    FROM information_schema.columns
+                    WHERE table_name = :table_name
+                    AND table_schema = 'public'
+                    ORDER BY ordinal_position
+                """),
+                {"table_name": table_name}
+            ).fetchall()
+            backup_col_names = {row[0] for row in backup_cols}
+        except Exception as e:
+            logger.error(f"❌ Failed to get BACKUP columns for {table_name}: {str(e)}")
+            try:
+                backup_db.rollback()
+            except:
+                pass
+            return []
+        
+        # Find COMMON columns
+        common_cols = sorted(primary_col_names & backup_col_names)
+        
+        if not common_cols:
+            logger.error(f"❌ No common columns found between PRIMARY and BACKUP for {table_name}")
+            logger.info(f"   PRIMARY columns: {sorted(primary_col_names)}")
+            logger.info(f"   BACKUP columns: {sorted(backup_col_names)}")
+            return []
+        
+        logger.info(f"🔗 Found {len(common_cols)} common columns: {common_cols}")
+        return common_cols
+    
     def _sync_table(self, primary_db: Session, backup_db: Session, table_name: str) -> int:
         """Sync a single table from primary to backup
         
-        Strategy: Clear backup table and reload from primary (ensures consistency)
-        Handles missing tables gracefully.
+        Strategy: SMART SYNC - Sync ONLY common columns that exist in BOTH databases
+        This handles schema differences gracefully (e.g., Supabase auth columns)
         """
         # Always rollback any failed transactions first
         try:
@@ -155,7 +216,6 @@ class DatabaseSync:
                 text(f"SELECT COUNT(*) as cnt FROM {table_name}")
             ).scalar()
         except Exception as e:
-            # Transaction may be aborted - rollback and return
             try:
                 primary_db.rollback()
             except:
@@ -169,7 +229,6 @@ class DatabaseSync:
                 text(f"SELECT COUNT(*) as cnt FROM {table_name}")
             ).scalar()
         except Exception as e:
-            # Transaction may be aborted - rollback and return
             try:
                 backup_db.rollback()
             except:
@@ -186,36 +245,16 @@ class DatabaseSync:
         # Tables don't match - full sync needed
         logger.warning(f"🔄 Resyncing {table_name} (primary: {primary_count}, backup: {backup_count})")
         
+        # 🔗 SMART SYNC: Get ONLY common columns
+        common_cols = self._get_common_columns(primary_db, backup_db, table_name)
+        if not common_cols:
+            logger.error(f"❌ Cannot sync {table_name} - no common columns found")
+            return 0
+        
+        col_str = ", ".join(common_cols)
+        
         try:
-            # Get schema columns from primary (with transaction safety)
-            try:
-                schema_result = primary_db.execute(
-                    text(f"""
-                        SELECT column_name 
-                        FROM information_schema.columns
-                        WHERE table_name = :table_name
-                        AND table_schema = 'public'
-                        ORDER BY ordinal_position
-                    """),
-                    {"table_name": table_name}
-                ).fetchall()
-            except Exception as e:
-                # Schema query failed - rollback and return
-                try:
-                    primary_db.rollback()
-                except:
-                    pass
-                logger.error(f"❌ Schema query failed for {table_name}: {str(e)}")
-                return 0
-            
-            if not schema_result:
-                logger.error(f"❌ Could not get schema for {table_name}")
-                return 0
-            
-            col_names = [row[0] for row in schema_result]
-            col_str = ", ".join(col_names)
-            
-            # Clear backup table (with separate transaction)
+            # Clear backup table
             try:
                 backup_db.execute(text(f"DELETE FROM {table_name}"))
                 backup_db.commit()
@@ -231,50 +270,65 @@ class DatabaseSync:
                 logger.info(f"✅ {table_name}: 0 rows to sync")
                 return 0
             
-            # Get all data from primary (paginated to avoid memory issues)
-            batch_size = 1000
+            # Get all data from primary (paginated)
+            batch_size = 500
             offset = 0
             total_synced = 0
             
-            while True:
-                try:
-                    # Get primary data - specify exact columns to avoid schema issues
-                    rows = primary_db.execute(
-                        text(f"""
-                            SELECT {col_str} FROM {table_name}
-                            ORDER BY id
-                            LIMIT :limit OFFSET :offset
-                        """),
-                        {"limit": batch_size, "offset": offset}
-                    ).fetchall()
-                    
-                    if not rows:
-                        break
-                    
-                    # Insert into backup in batches
+            try:
+                while True:
                     try:
-                        for row in rows:
-                            # Convert row to dict using column names
-                            values_dict = {col_names[i]: row[i] for i in range(len(col_names))}
-                            placeholders = ", ".join([f":{key}" for key in col_names])
+                        # Get primary data - ONLY common columns
+                        rows = primary_db.execute(
+                            text(f"""
+                                SELECT {col_str} FROM {table_name}
+                                ORDER BY id
+                                LIMIT :limit OFFSET :offset
+                            """),
+                            {"limit": batch_size, "offset": offset}
+                        ).fetchall()
+                        
+                        if not rows:
+                            break
+                        
+                        # Insert into backup in batches
+                        try:
+                            batch_count = 0
+                            for row in rows:
+                                # Convert row to dict using column names
+                                values_dict = {common_cols[i]: row[i] for i in range(len(common_cols))}
+                                placeholders = ", ".join([f":{key}" for key in common_cols])
+                                
+                                try:
+                                    backup_db.execute(
+                                        text(f"INSERT INTO {table_name} ({col_str}) VALUES ({placeholders})"),
+                                        values_dict
+                                    )
+                                    batch_count += 1
+                                except Exception as row_err:
+                                    logger.warning(f"⚠️  Row insert error in {table_name}: {str(row_err)[:100]}")
+                                    # Continue with next row
+                                    continue
                             
-                            backup_db.execute(
-                                text(f"INSERT INTO {table_name} ({col_str}) VALUES ({placeholders})"),
-                                values_dict
-                            )
-                        
-                        backup_db.commit()
-                        total_synced += len(rows)
-                        offset += batch_size
+                            backup_db.commit()
+                            total_synced += batch_count
+                            offset += batch_size
+                            logger.debug(f"✅ Inserted {batch_count} rows into {table_name}")
+                        except Exception as e:
+                            backup_db.rollback()
+                            logger.error(f"❌ Error inserting batch at offset {offset}: {str(e)[:150]}")
+                            # Continue with next batch
+                            offset += batch_size
+                            
                     except Exception as e:
-                        backup_db.rollback()
-                        logger.error(f"❌ Error inserting batch at offset {offset}: {str(e)}")
-                        # Continue with next batch
-                        offset += batch_size
-                        
-                except Exception as e:
-                    logger.error(f"❌ Error fetching batch at offset {offset}: {str(e)}")
-                    break
+                        logger.error(f"❌ Error fetching batch at offset {offset}: {str(e)}")
+                        break
+            finally:
+                # Ensure clean state after sync
+                try:
+                    backup_db.rollback()
+                except:
+                    pass
             
             logger.info(f"✅ Synced {table_name}: {total_synced} rows")
             return total_synced
