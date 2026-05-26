@@ -253,85 +253,85 @@ class DatabaseSync:
         
         col_str = ", ".join(common_cols)
         
+        if primary_count == 0:
+            logger.info(f"✅ {table_name}: 0 rows to sync")
+            return 0
+        
+        # Get all data from primary (paginated)
+        batch_size = 500
+        offset = 0
+        total_synced = 0
+        
         try:
-            # Clear backup table
-            try:
-                backup_db.execute(text(f"DELETE FROM {table_name}"))
-                backup_db.commit()
-            except Exception as e:
+            while True:
                 try:
-                    backup_db.rollback()
-                except:
-                    pass
-                logger.warning(f"⚠️  Could not clear backup table {table_name}: {str(e)}")
-                # Continue anyway - we'll try to insert
-            
-            if primary_count == 0:
-                logger.info(f"✅ {table_name}: 0 rows to sync")
-                return 0
-            
-            # Get all data from primary (paginated)
-            batch_size = 500
-            offset = 0
-            total_synced = 0
-            
-            try:
-                while True:
-                    try:
-                        # Get primary data - ONLY common columns
-                        rows = primary_db.execute(
-                            text(f"""
-                                SELECT {col_str} FROM {table_name}
-                                ORDER BY id
-                                LIMIT :limit OFFSET :offset
-                            """),
-                            {"limit": batch_size, "offset": offset}
-                        ).fetchall()
-                        
-                        if not rows:
-                            break
-                        
-                        # Insert into backup in batches
-                        try:
-                            batch_count = 0
-                            for row in rows:
-                                # Convert row to dict using column names
-                                values_dict = {common_cols[i]: row[i] for i in range(len(common_cols))}
-                                placeholders = ", ".join([f":{key}" for key in common_cols])
-                                
-                                try:
-                                    backup_db.execute(
-                                        text(f"INSERT INTO {table_name} ({col_str}) VALUES ({placeholders})"),
-                                        values_dict
-                                    )
-                                    batch_count += 1
-                                except Exception as row_err:
-                                    logger.warning(f"⚠️  Row insert error in {table_name}: {str(row_err)[:100]}")
-                                    # Continue with next row
-                                    continue
-                            
-                            backup_db.commit()
-                            total_synced += batch_count
-                            offset += batch_size
-                            logger.debug(f"✅ Inserted {batch_count} rows into {table_name}")
-                        except Exception as e:
-                            backup_db.rollback()
-                            logger.error(f"❌ Error inserting batch at offset {offset}: {str(e)[:150]}")
-                            # Continue with next batch
-                            offset += batch_size
-                            
-                    except Exception as e:
-                        logger.error(f"❌ Error fetching batch at offset {offset}: {str(e)}")
+                    # Get primary data - ONLY common columns
+                    rows = primary_db.execute(
+                        text(f"""
+                            SELECT {col_str} FROM {table_name}
+                            ORDER BY id
+                            LIMIT :limit OFFSET :offset
+                        """),
+                        {"limit": batch_size, "offset": offset}
+                    ).fetchall()
+                    
+                    if not rows:
                         break
-            finally:
-                # Ensure clean state after sync
-                try:
-                    backup_db.rollback()
-                except:
-                    pass
-            
-            logger.info(f"✅ Synced {table_name}: {total_synced} rows")
-            return total_synced
+                    
+                    # UPSERT into backup in batches (no delete needed!)
+                    try:
+                        batch_count = 0
+                        for row in rows:
+                            # Convert row to dict using column names
+                            values_dict = {common_cols[i]: row[i] for i in range(len(common_cols))}
+                            
+                            # Build UPSERT query: INSERT ... ON CONFLICT DO UPDATE
+                            # This is efficient - no deleting, just update if exists or insert if new
+                            col_list = ", ".join(common_cols)
+                            val_list = ", ".join([f":{key}" for key in common_cols])
+                            
+                            # Build the UPDATE part: col1 = EXCLUDED.col1, col2 = EXCLUDED.col2, ...
+                            update_cols = ", ".join([f"{col} = EXCLUDED.{col}" for col in common_cols if col != 'id'])
+                            
+                            upsert_query = f"""
+                                INSERT INTO {table_name} ({col_list})
+                                VALUES ({val_list})
+                                ON CONFLICT (id) DO UPDATE SET {update_cols}
+                            """
+                            
+                            try:
+                                backup_db.execute(text(upsert_query), values_dict)
+                                batch_count += 1
+                            except Exception as row_err:
+                                # Silently skip error rows - UPSERT should handle most cases
+                                logger.debug(f"ℹ️  Skip row in {table_name}: {str(row_err)[:80]}")
+                                continue
+                        
+                        backup_db.commit()
+                        total_synced += batch_count
+                        offset += batch_size
+                        logger.debug(f"✅ Upserted {batch_count} rows into {table_name}")
+                    except Exception as e:
+                        try:
+                            backup_db.rollback()
+                        except:
+                            pass
+                        logger.warning(f"⚠️  Error upserting batch at offset {offset}: {str(e)[:100]}")
+                        # Continue with next batch
+                        offset += batch_size
+                        
+                except Exception as e:
+                    logger.error(f"❌ Error fetching batch at offset {offset}: {str(e)}")
+                    break
+        finally:
+            # Ensure clean state after sync
+            try:
+                backup_db.rollback()
+            except:
+                pass
+        
+        logger.info(f"✅ Synced {table_name}: {total_synced} rows (using UPSERT)")
+        return total_synced
             
         except Exception as e:
             try:
