@@ -25,10 +25,19 @@ CÁCH SỬ DỤNG:
   if result["is_valid"]:
       clean_url = result["sanitized_url"]
 
+SMART VALIDATION LOGIC (Mới - Fix 422 Error):
+  ✅ ALLOW: http://vulnerable-site.com/search?q=<script>alert('XSS')</script>
+     Tại sao? Query params là để TEST model phát hiện XSS, không phải tấn công thực
+  ✅ ALLOW: https://example.com?user='test' (query param với quote)
+     Tại sao? Apostrophe ở query param không phải SQL injection
+  ❌ BLOCK: javascript://alert('xss') (dangerous protocol)
+  ❌ BLOCK: ' UNION SELECT * (SQL injection keyword)
+
 LƯU Ý:
   - URL phải có http:// hoặc https://
-  - Độ dài tối đa: 5000 ký tự
-  - Độ dài tối thiểu: 5 ký tự
+  - Độ dài tối đa: 2048 ký tự URL, 10000 ký tự text
+  - HTML tags ở query params = ALLOWED (test payload)
+  - Dangerous protocols = BLOCKED
 """
 import re
 from typing import Optional
@@ -39,6 +48,9 @@ class InputValidator:
     """Comprehensive input validation for URLs and text"""
     
     # URL validation patterns
+    # Allow any characters after domain (path, query, fragment)
+    # This permits test payloads like: ?q=<script> or ?q=1' UNION SELECT
+    # Security: Dangerous protocols (javascript:, data:) caught separately
     URL_PATTERN = re.compile(
         r'^(?:http|ftp)s?://'  # http:// or https://
         r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+(?:[A-Z]{2,6}\.?|[A-Z0-9-]{2,}\.?)|'  # domain...
@@ -46,7 +58,7 @@ class InputValidator:
         r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|'  # ...or ipv4
         r'\[?[A-F0-9]*:[A-F0-9:]+\]?)'  # ...or ipv6
         r'(?::\d+)?'  # optional port
-        r'(?:/?|[/?]\S+)$', re.IGNORECASE
+        r'.*$', re.IGNORECASE  # path, query, fragment - allow anything
     )
     
     # Maximum input lengths
@@ -83,40 +95,78 @@ class InputValidator:
             result['error'] = f"URL too long (max {cls.MAX_URL_LENGTH} characters)"
             return result
         
-        # Check for SQL injection patterns
-        sql_injection_patterns = [
-            r"'.*'|'.*",
-            r"'.*--",
-            r"'.*\/\*.*\*\/",
-            r"'.*union.*select",
-            r"'.*drop.*table",
-            r"'.*insert.*into",
-            r"'.*update.*set",
-            r"'.*delete.*from"
-        ]
+        # ===== FIX: SQL injection detection (query params allowed for testing) =====
+        # STRATEGY: Parse URL and check SQL patterns ONLY in base URL, not query params
+        # 
+        # WHY? Backend doesn't execute query params against database.
+        # ML model NEEDS to see SQL keywords in payloads to learn detection.
+        # Test case: http://site.com/search?q=1' UNION SELECT ... (SHOULD BE ALLOWED)
+        #
+        # Attack patterns (BLOCK in path):
+        #   • /path?'; DROP TABLE -- (destructive)
+        #   • /admin?id=1 OR 1=1 (logic bypass)  ← Only check if in PATH, not query param
+        #
+        # Safe patterns (ALLOW):
+        #   • https://example.com?user='test' (query param - for model testing)
+        #   • https://example.com?q=1' UNION SELECT ... (test payload - for ML testing)
+        #   • https://user's-site.com (apostrophe in domain)
         
-        for pattern in sql_injection_patterns:
-            if re.search(pattern, url, re.IGNORECASE):
-                result['error'] = "Invalid URL format - potential SQL injection detected"
-                return result
+        try:
+            parsed = urlparse(url)
+            # Check SQL injection ONLY in path/netloc, NOT in query string
+            base_url_parts = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+            
+            sql_injection_patterns = [
+                # These are real attack vectors in the URL structure itself
+                r"';?\s*(DROP|DELETE|INSERT|UPDATE|CREATE|TRUNCATE)",  # '; DROP
+                r"admin\s+.*?['\"]\s*(OR|AND)\s+",                    # admin' OR
+                r"['\"]?\s*OR\s+['\"]?1['\"]?\s*=\s*['\"]?1",         # ' OR '1'='1
+                r"union.*?select",                                      # UNION SELECT (only in path)
+            ]
+            
+            for pattern in sql_injection_patterns:
+                if re.search(pattern, base_url_parts, re.IGNORECASE):
+                    result['error'] = "Invalid URL format - potential SQL injection detected"
+                    return result
+        except Exception:
+            # If parsing fails, log but continue
+            pass
         
-        # Check for XSS patterns
-        xss_patterns = [
-            r"<script.*?>.*?</script>",
-            r"javascript:",
-            r"vbscript:",
-            r"data:text/html",
-            r"<iframe.*?>.*?</iframe>",
-            r"<object.*?>.*?</object>",
-            r"<embed.*?>",
-            r"<link.*?>",
-            r"<meta.*?>"
-        ]
+        # ===== FIX: XSS detection - Allow HTML tags in query params (test case) =====
+        # Allow: http://vulnerable-site.com/search?q=<script>alert('XSS')</script>
+        #        (This is legitimate security testing!)
+        # Block: javascript://alert('xss')
+        #        (This is actual XSS attack)
+        #
+        # Strategy: Parse URL, check XSS only in scheme/netloc/path, NOT in query
+        # Why? Query params can contain test payloads (intended to test model)
         
-        for pattern in xss_patterns:
-            if re.search(pattern, url, re.IGNORECASE):
-                result['error'] = "Invalid URL format - potential XSS detected"
-                return result
+        try:
+            parsed = urlparse(url)
+            # Reconstruct URL without query params for XSS check
+            url_without_query = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+            
+            # Only check dangerous XSS patterns in URL structure itself
+            xss_patterns = [
+                r"javascript:",      # javascript: protocol
+                r"vbscript:",        # vbscript: protocol
+                r"data:text/html",   # data: protocol with HTML
+                r"data:application/x-sh",  # data: protocol with shell
+            ]
+            
+            for pattern in xss_patterns:
+                if re.search(pattern, url_without_query, re.IGNORECASE):
+                    result['error'] = "Invalid URL format - potential XSS detected"
+                    return result
+            
+            # ⚠️ Allow raw HTML tags in query params
+            # Reason: They're test payloads for model testing, not actual attacks
+            # Backend won't execute them (just passes to model for analysis)
+            # Example: ?q=<script>alert('xss')</script> is safe on backend
+            
+        except Exception:
+            # If parsing fails, continue anyway (URL probably malformed but let next check handle)
+            pass
         
         # Basic URL format validation
         if not cls.URL_PATTERN.match(url):
@@ -177,16 +227,18 @@ class InputValidator:
             result['error'] = f"Text too long (max {cls.MAX_TEXT_LENGTH} characters)"
             return result
         
-        # Check for SQL injection patterns
+        # ===== FIX: SQL injection detection (less aggressive) =====
+        # OLD: Blocked ANY single quote r"'.*'|'.*" → Too strict!
+        # NEW: Only block SQL keywords after quote
+        
         sql_injection_patterns = [
-            r"'.*'|'.*",
-            r"'.*--",
-            r"'.*\/\*.*\*\/",
-            r"'.*union.*select",
-            r"'.*drop.*table",
-            r"'.*insert.*into",
-            r"'.*update.*set",
-            r"'.*delete.*from"
+            r"'\s*(AND|OR|NOT)\s+",           # ' AND, ' OR, ' NOT
+            r"'\s*;\s*(DROP|DELETE|INSERT|UPDATE|CREATE)",  # '; DROP
+            r"'\s*UNION\s+SELECT",            # ' UNION SELECT
+            r"'\s*--",                        # ' --
+            r"'\s*\/\*.*?\*\/",             # ' /* */
+            r"admin.*'.*'\s*=\s*'",           # admin'='
+            r"\=\s*'.*'\s*(AND|OR|UNION)",   # = 'x' AND
         ]
         
         for pattern in sql_injection_patterns:
@@ -194,23 +246,27 @@ class InputValidator:
                 result['error'] = "Invalid text format - potential SQL injection detected"
                 return result
         
-        # Check for XSS patterns
+        # ===== FIX: XSS detection for text - Allow HTML tags (test case) =====
+        # Allow: <script>alert('xss')</script>
+        #        (This is for model to analyze, not to execute)
+        # Block: javascript: protocol, data: protocol
+        #        (These are actual attack vectors)
+        
         xss_patterns = [
-            r"<script.*?>.*?</script>",
-            r"javascript:",
-            r"vbscript:",
-            r"data:text/html",
-            r"<iframe.*?>.*?</iframe>",
-            r"<object.*?>.*?</object>",
-            r"<embed.*?>",
-            r"<link.*?>",
-            r"<meta.*?>"
+            r"javascript:",        # javascript: protocol
+            r"vbscript:",          # vbscript: protocol
+            r"data:text/html",     # data: protocol with HTML
+            r"data:application/x-sh",  # data: protocol with shell
         ]
         
         for pattern in xss_patterns:
             if re.search(pattern, text, re.IGNORECASE):
                 result['error'] = "Invalid text format - potential XSS detected"
                 return result
+        
+        # ⚠️ Allow raw HTML tags in text
+        # Reason: They're test payloads for model to detect phishing/malicious patterns
+        # Backend won't render/execute them (just passes to ML model for analysis)
         
         # Sanitize text
         sanitized_text = cls._sanitize_text(text)
