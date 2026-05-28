@@ -20,6 +20,7 @@ from core.explainers import get_shap_explanation
 
 from backend.utils.validators import InputValidator, validate_input
 from backend.utils.auth import optional_auth, check_rate_limit, security
+from backend.utils.response_formatter import format_scan_response
 from backend.utils.logger import (
     log_scan_attempt,
     log_scan_result,
@@ -69,6 +70,7 @@ class ScanResponse(BaseModel):
     heuristics_reason: dict
     ml_features: dict
     feature_explanation: str
+    user_friendly: dict = None  # ✨ NEW - User-friendly formatted response
 
 
 # ------------------------------------------------------------------ #
@@ -213,6 +215,21 @@ def scan_url_or_text(
         result=result_payload,
         request_id=request_id,
     )
+
+    # --- 7b. FORMAT RESPONSE FOR USER-FRIENDLY DISPLAY ----------
+    # ✨ NEW: Convert raw ML scores to user-friendly display
+    #    • Normalize scores (0-2.5) → 0-100
+    #    • Add visual bars ████████████████████
+    #    • Add explanations + recommendations
+    #    • Tell user what to do
+    user_formatted_response = format_scan_response(
+        prediction=prediction,
+        heuristics=heuristics_reason,
+        shap_result={"top_features": top_features, "method": prediction.get("explanation_method", "unknown")}
+    )
+    
+    # Merge with original data
+    result_payload["user_friendly"] = user_formatted_response
 
     # --- 8. LƯU VÀO DATABASE ----------------------------------
     try:
