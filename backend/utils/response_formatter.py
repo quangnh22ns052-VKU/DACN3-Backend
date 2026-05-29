@@ -97,7 +97,7 @@ def get_keyword_explanation(keyword: str, score_100: int) -> str:
     
     # Find matching explanation
     for keyword_pattern, explanation in explanations.items():
-        if keyword_pattern in keyword_lower:
+        if keyword_lower == keyword_pattern:
             return explanation
     
     return explanations["default"]
@@ -152,43 +152,120 @@ def format_ml_results(top_features: dict) -> list:
     return result
 
 
-def get_severity_level(confidence: float) -> tuple:
+def format_heuristics_results(heuristics: dict) -> dict:
     """
-    Convert confidence score (0-1) → severity level + emoji + color
+    Format heuristics rules for user-friendly display
     
-    Returns: (level, emoji, color, description)
+    Converts simple rule list into detailed analysis with
+    severity indicators and explanations.
+    
+    Input: {"triggered": True, "rules": ["Không dùng HTTPS...", ...]}
+    Output: {
+      "method": "Rule-Based Detection",
+      "triggered": True,
+      "rules_formatted": [
+        {"rule": "...", "severity": "HIGH", "emoji": "🔴"},
+        ...
+      ],
+      "total_rules_triggered": 3
+    }
     """
+    triggered_rules = heuristics.get("rules", [])
+    
+    # Map rules to severity levels
+    rule_severity_map = {
+        "HTTP": "CRITICAL",  # Unencrypted
+        "HTTPS": "CRITICAL",  # if NOT HTTPS
+        "free": "HIGH",       # Common phishing keyword
+        "verify": "HIGH",     # Common phishing keyword
+        "login": "HIGH",      # Account access request
+        "password": "CRITICAL",  # Direct password request
+        "confirm": "HIGH",    # Confirmation request
+        "update": "HIGH",     # Account update request
+        "casino": "CRITICAL", # Gambling scam
+        "cá cược": "CRITICAL",  # Vietnamese: Gambling scam
+        "xóc đĩa": "CRITICAL",  # Vietnamese: Gambling scam
+        "ngân hàng": "CRITICAL",  # Bank keywords
+        "paypal": "HIGH",     # Spoofed payment service
+        "tài chính": "HIGH",  # Financial keywords
+        "thông tin": "MEDIUM",  # Information request
+        "dữ liệu": "MEDIUM",  # Data request
+        "domain": "MEDIUM",   # Domain structure issues
+        "subdomain": "MEDIUM",  # Unusual subdomains
+    }
+    
+    def get_rule_severity(rule_text: str) -> tuple:
+        """Determine severity of a rule and return (severity, emoji, description)"""
+        rule_lower = rule_text.lower()
+        
+        # Check for CRITICAL indicators
+        if any(critical in rule_lower for critical in ["mật khẩu", "password", "casino", "cá cược", "xóc đĩa"]):
+            return ("CRITICAL", "🔴", "Rất nguy hiểm - Dấu hiệu phishing mạnh mẽ")
+        elif any(critical in rule_lower for critical in ["http://", "không an toàn", "không dùng https"]):
+            return ("HIGH", "🟠", "Nguy hiểm cao - Kết nối không được bảo vệ")
+        elif any(high in rule_lower for high in ["free", "verify", "confirm", "login", "paypal", "ngân hàng"]):
+            return ("HIGH", "🟠", "Nguy hiểm cao - Dấu hiệu phishing phổ biến")
+        elif any(med in rule_lower for med in ["thông tin", "dữ liệu", "domain", "url quá dài"]):
+            return ("MEDIUM", "🟡", "Nguy hiểm trung bình - Nên cẩn thận")
+        else:
+            return ("LOW", "🟢", "Nguy hiểm thấp - Vẫn nên chú ý")
+    
+    formatted_rules = []
+    for rule_text in triggered_rules:
+        severity, emoji, description = get_rule_severity(rule_text)
+        formatted_rules.append({
+            "rule": rule_text,
+            "severity": severity,
+            "emoji": emoji,
+            "description": description
+        })
+    
+    return {
+        "method": "Rule-Based Detection (Heuristics)",
+        "triggered": len(triggered_rules) > 0,
+        "rules_formatted": formatted_rules,
+        "total_rules_triggered": len(triggered_rules),
+        "summary": f"Phát hiện {len(triggered_rules)} dấu hiệu phishing dựa trên quy tắc" if triggered_rules else "Không phát hiện dấu hiệu phishing theo quy tắc"
+    }
+
+
+def get_severity_level(confidence: float, label: str) -> tuple:
+    # Safe và suspicious không phụ thuộc vào con số confidence
+    if label == "safe":
+        return ("SAFE", "✅", "success", "An toàn - Không phát hiện dấu hiệu phishing")
+    
+    if label == "suspicious":
+        return ("MEDIUM", "🟡", "warning", "Nguy hiểm trung bình - Cần cẩn thận")
+    
+    # Chỉ phishing mới dùng confidence để phân mức độ
     if confidence >= 0.85:
         return ("CRITICAL", "🔴", "danger", "Nguy hiểm rất cao - Phishing có xác suất gần như chắc chắn")
     elif confidence >= 0.70:
         return ("HIGH", "🟠", "warning", "Nguy hiểm cao - Rất có khả năng là phishing")
     elif confidence >= 0.50:
         return ("MEDIUM", "🟡", "warning", "Nguy hiểm trung bình - Cần cẩn thận")
-    elif confidence >= 0.30:
-        return ("LOW", "🟢", "info", "Nguy hiểm thấp - Nhưng vẫn nên cẩn thận")
     else:
-        return ("SAFE", "✅", "success", "An toàn - Không phát hiện dấu hiệu phishing")
-
+        return ("LOW", "🟢", "info", "Nguy hiểm thấp - Nhưng vẫn nên cẩn thận")
 
 def format_scan_response(prediction: dict, heuristics: dict, shap_result: dict) -> dict:
     """
     Format complete scan response for end user
     
     Combines ML prediction + heuristics + SHAP explanation
-    into single user-friendly response
+    into single user-friendly response with consolidated display
     """
     
     confidence = prediction.get("confidence", 0)
     label = prediction.get("label", "unknown")
     
-    severity_level, severity_emoji, severity_color, severity_desc = get_severity_level(confidence)
+    severity_level, severity_emoji, severity_color, severity_desc = get_severity_level(confidence, label)
     
     # Format ML features
     ml_features = prediction.get("top_features", {})
     formatted_features = format_ml_results(ml_features)
     
-    # Format heuristics
-    heuristics_triggered = heuristics.get("rules", [])
+    # Format heuristics using new consolidated formatter
+    formatted_heuristics = format_heuristics_results(heuristics)
     
     return {
         # Quick summary
@@ -208,17 +285,13 @@ def format_scan_response(prediction: dict, heuristics: dict, shap_result: dict) 
             "total_signals_detected": len(ml_features)
         },
         
-        # Heuristics (rule-based)
-        "heuristics_analysis": {
-            "method": "Rule-Based Detection",
-            "triggered_rules": heuristics_triggered,
-            "total_rules_triggered": len(heuristics_triggered)
-        },
+        # Heuristics (rule-based) - NOW WITH DETAILED FORMATTING
+        "heuristics_analysis": formatted_heuristics,
         
         # User recommendations
         "recommendations": {
             "short": _get_short_recommendation(label, confidence),
-            "long": _get_detailed_recommendation(label, heuristics_triggered),
+            "long": _get_detailed_recommendation(label, formatted_heuristics.get("rules_formatted", [])),
             "actions": _get_action_items(label)
         }
     }
@@ -238,11 +311,14 @@ def _get_short_recommendation(label: str, confidence: float) -> str:
         return "✅ Không phát hiện dấu hiệu phishing rõ ràng (nhưng vẫn nên cẩn thận)."
 
 
-def _get_detailed_recommendation(label: str, rules: list) -> str:
-    """Get detailed explanation"""
+def _get_detailed_recommendation(label: str, formatted_rules: list) -> str:
+    """Get detailed explanation based on label and formatted heuristic rules"""
     if label == "phishing":
-        if rules:
-            return f"Phát hiện {len(rules)} dấu hiệu phishing: " + " | ".join(rules[:2])
+        # Extract rule text from formatted rules
+        rule_texts = [rule.get("rule", "") for rule in formatted_rules] if isinstance(formatted_rules, list) and formatted_rules and isinstance(formatted_rules[0], dict) else formatted_rules
+        
+        if rule_texts:
+            return f"Phát hiện {len(rule_texts)} dấu hiệu phishing: " + " | ".join(rule_texts[:2])
         return "Mô hình ML phát hiện dấu hiệu phishing mạnh mẽ."
     return "Không phát hiện dấu hiệu phishing đáng kể."
 
